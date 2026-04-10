@@ -1,0 +1,35 @@
+<svg width="640" height="640" viewBox="0 0 640 640" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="80" y1="80" x2="560" y2="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FBFF"/>
+      <stop offset="1" stop-color="#E4EEFF"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="96" y1="96" x2="544" y2="544" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1D4ED8"/>
+      <stop offset="1" stop-color="#0891B2"/>
+    </linearGradient>
+    <linearGradient id="boat" x1="320" y1="220" x2="320" y2="470" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0F172A"/>
+      <stop offset="1" stop-color="#334155"/>
+    </linearGradient>
+  </defs>
+
+  <circle cx="320" cy="320" r="252" fill="url(#bg)"/>
+  <circle cx="320" cy="320" r="246" stroke="url(#ring)" stroke-width="8"/>
+
+  <circle cx="320" cy="320" r="220" stroke="#BFD3FF" stroke-width="2" stroke-dasharray="6 10"/>
+  <circle cx="320" cy="320" r="180" stroke="#D0DEFA" stroke-width="2"/>
+
+  <line x1="320" y1="102" x2="320" y2="154" stroke="#0F172A" stroke-width="6" stroke-linecap="round"/>
+  <line x1="320" y1="486" x2="320" y2="538" stroke="#0F172A" stroke-width="6" stroke-linecap="round"/>
+  <line x1="102" y1="320" x2="154" y2="320" stroke="#0F172A" stroke-width="6" stroke-linecap="round"/>
+  <line x1="486" y1="320" x2="538" y2="320" stroke="#0F172A" stroke-width="6" stroke-linecap="round"/>
+
+  <g transform="translate(320 332)">
+    <path d="M0 -124 L52 108 L0 130 L-52 108 Z" fill="url(#boat)"/>
+    <path d="M0 -92 L32 98 L0 114 L-32 98 Z" fill="#F8FAFC" fill-opacity="0.9"/>
+    <circle cx="0" cy="0" r="10" fill="#0EA5E9"/>
+  </g>
+
+  <circle cx="320" cy="320" r="12" fill="#0EA5E9"/>
+</svg>

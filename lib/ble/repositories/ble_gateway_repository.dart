@@ -1,0 +1,349 @@
+import 'dart:collection';
+
+import 'package:flutter/foundation.dart';
+
+import '../../models/n2k_device_info.dart';
+import '../models/ble_gateway_event.dart';
+import '../models/device_list_snapshot.dart';
+import '../parsers/ble_gateway_event_parser.dart';
+import '../parsers/device_list_text_parser.dart';
+
+class BleGatewayRepository extends ChangeNotifier {
+  BleGatewayRepository({
+    BleGatewayEventParser? eventParser,
+    DeviceListTextParser? textParser,
+  }) : _eventParser = eventParser ?? BleGatewayEventParser(),
+       _textParser = textParser ?? DeviceListTextParser();
+
+  final BleGatewayEventParser _eventParser;
+  final DeviceListTextParser _textParser;
+
+  final List<BleGatewayEvent> _recentEvents = <BleGatewayEvent>[];
+  List<N2kDeviceInfo> _devices = const <N2kDeviceInfo>[];
+  DeviceListSnapshot? _latestSnapshot;
+  DeviceListSnapshot? _buildingSnapshot;
+  BleGatewayEvent? _latestEvent;
+  String _lastStatusLine = 'Idle';
+  String _lastSource = 'none';
+  String? _lastError;
+  DateTime? _lastUpdateAt;
+  DateTime? _lastSnapshotAt;
+  int? _currentRequestId;
+  int? _eventProgressExpected;
+  int? _eventProgressReceived;
+  bool _requestPending = false;
+  bool _snapshotInProgress = false;
+
+  UnmodifiableListView<N2kDeviceInfo> get devices =>
+      UnmodifiableListView<N2kDeviceInfo>(_devices);
+  UnmodifiableListView<BleGatewayEvent> get recentEvents =>
+      UnmodifiableListView<BleGatewayEvent>(_recentEvents);
+  DeviceListSnapshot? get latestSnapshot => _latestSnapshot;
+  BleGatewayEvent? get latestEvent => _latestEvent;
+  String get lastStatusLine => _lastStatusLine;
+  String get lastSource => _lastSource;
+  String? get lastError => _lastError;
+  DateTime? get lastUpdateAt => _lastUpdateAt;
+  DateTime? get lastSnapshotAt => _lastSnapshotAt;
+  int? get currentRequestId =>
+      _latestSnapshot?.snapshotRequestId ??
+      _latestSnapshot?.pendingRequestId ??
+      _currentRequestId;
+  bool get requestPending => _latestSnapshot?.requestPending ?? _requestPending;
+  bool get snapshotInProgress =>
+      _latestSnapshot?.snapshotInProgress ?? _snapshotInProgress;
+  int? get progressExpected => snapshotInProgress
+      ? _eventProgressExpected ?? _latestSnapshot?.snapshotExpected
+      : _latestSnapshot?.snapshotExpected;
+  int? get progressReceived => snapshotInProgress
+      ? _eventProgressReceived ?? _latestSnapshot?.snapshotReceived
+      : _latestSnapshot?.snapshotReceived;
+
+  int get malformedDeviceListMessages =>
+      _latestSnapshot?.malformedDeviceListMessages ?? 0;
+  int get completedSnapshots => _latestSnapshot?.completedSnapshots ?? 0;
+  int get droppedSnapshots => _latestSnapshot?.droppedSnapshots ?? 0;
+  int get unknownPacketTypes => _latestSnapshot?.unknownPacketTypes ?? 0;
+  int get spiParseErrors => _latestSnapshot?.spiParseErrors ?? 0;
+
+  String _ts() {
+    final now = DateTime.now().toUtc();
+    String two(int v) => v.toString().padLeft(2, '0');
+    String three(int v) => v.toString().padLeft(3, '0');
+    return '${two(now.hour)}:${two(now.minute)}:${two(now.second)}.${three(now.millisecond)}Z';
+  }
+
+  void handleIncomingLine(String line, {required String source}) {
+    final normalizedLine = line.trim();
+    if (normalizedLine.isEmpty) {
+      return;
+    }
+
+    debugPrint('[${_ts()}] [REPO] RX src=$source: $normalizedLine');
+    _lastSource = source;
+    _lastUpdateAt = DateTime.now().toUtc();
+
+    final snapshot = _textParser.tryParseSnapshotHeader(normalizedLine);
+    if (snapshot != null) {
+      debugPrint(
+        '[${_ts()}] [REPO] snapshot header accepted id=${snapshot.snapshotRequestId} complete=${snapshot.snapshotComplete} expected=${snapshot.snapshotExpected}',
+      );
+      _buildingSnapshot = snapshot;
+      _lastStatusLine = _snapshotStatusLine(snapshot, snapshot.devices.length);
+      _applySnapshot(snapshot);
+      notifyListeners();
+      return;
+    }
+
+    final device = _textParser.tryParseSnapshotDevice(normalizedLine);
+    if (device != null && _buildingSnapshot != null) {
+      debugPrint(
+        '[${_ts()}] [REPO] device accepted src=${device.sourceAddress} name="${device.name}" model="${device.model}" hasProductInfo=${device.hasProductInfo}',
+      );
+      final updatedSnapshot = _buildingSnapshot!.copyWith(
+        devices: List<N2kDeviceInfo>.unmodifiable(<N2kDeviceInfo>[
+          ..._buildingSnapshot!.devices,
+          device,
+        ]),
+        rawMessage: '${_buildingSnapshot!.rawMessage}\n$normalizedLine',
+      );
+      _buildingSnapshot = updatedSnapshot;
+      _lastStatusLine = _snapshotStatusLine(
+        updatedSnapshot,
+        updatedSnapshot.devices.length,
+      );
+      _applySnapshot(updatedSnapshot);
+      notifyListeners();
+      return;
+    }
+
+    if (device != null && _buildingSnapshot == null) {
+      debugPrint(
+        '[${_ts()}] [REPO] WARN device line arrived but no snapshot in progress (dropped): src=${device.sourceAddress}',
+      );
+    }
+
+    if (normalizedLine.toLowerCase().startsWith('device_list snapshot ')) {
+      _lastError = 'Malformed device_list snapshot ignored.';
+      debugPrint('[${_ts()}] [REPO] ERROR malformed snapshot header: $normalizedLine');
+    } else if (normalizedLine.toLowerCase().startsWith('device src=')) {
+      _lastError = 'Malformed device_list device ignored.';
+      debugPrint('[${_ts()}] [REPO] ERROR malformed device line: $normalizedLine');
+    }
+
+    final event = _eventParser.parse(normalizedLine, occurredAt: _lastUpdateAt);
+    _applyEvent(event);
+    _lastStatusLine = _eventStatusLine(event);
+    notifyListeners();
+  }
+
+  void markRequestQueued() {
+    // Keep _devices intact — continue showing the previous snapshot while the
+    // new request is in flight, so the UI never flashes a fallback name.
+    _latestSnapshot = null;
+    _buildingSnapshot = null;
+    _currentRequestId = null;
+    _eventProgressExpected = null;
+    _eventProgressReceived = null;
+    _requestPending = true;
+    _snapshotInProgress = true;
+    _lastError = null;
+    _lastStatusLine = 'Sending request_device_list...';
+    _lastSnapshotAt = null;
+    _lastUpdateAt = DateTime.now().toUtc();
+    notifyListeners();
+  }
+
+  void markWriteFailed(Object error) {
+    _requestPending = false;
+    _snapshotInProgress = false;
+    _lastError = '$error';
+    _lastStatusLine = 'request_device_list failed';
+    _lastUpdateAt = DateTime.now().toUtc();
+    notifyListeners();
+  }
+
+  void handleDisconnected() {
+    _buildingSnapshot = null;
+    _requestPending = false;
+    _snapshotInProgress = false;
+    _eventProgressExpected = null;
+    _eventProgressReceived = null;
+    _lastStatusLine = 'Disconnected';
+    _lastUpdateAt = DateTime.now().toUtc();
+    notifyListeners();
+  }
+
+  void _applySnapshot(DeviceListSnapshot snapshot) {
+    final dedupedDevices = dedupeDevicesBySrc(snapshot.devices);
+    _latestSnapshot = snapshot.copyWith(devices: dedupedDevices);
+    _lastError = null;
+    _currentRequestId = snapshot.snapshotRequestId ?? snapshot.pendingRequestId;
+    _requestPending = snapshot.requestPending;
+    _snapshotInProgress = snapshot.snapshotInProgress;
+    _eventProgressExpected = snapshot.snapshotExpected;
+    _eventProgressReceived = snapshot.snapshotReceived;
+    debugPrint(
+      '[${_ts()}] [REPO] _applySnapshot: id=$_currentRequestId complete=${snapshot.snapshotComplete} deviceCount=${dedupedDevices.length} expected=${snapshot.snapshotExpected}',
+    );
+
+    // Only commit when the gateway confirms the snapshot is complete.
+    // For the common case (complete=0) the data accumulates in _buildingSnapshot
+    // and is committed by the terminal event handlers below (timeout / complete).
+    // This way the UI shows a spinner until the full cycle is done and then
+    // reveals all devices at once.
+    if (snapshot.snapshotComplete) {
+      _devices = dedupedDevices;
+      _lastSnapshotAt = DateTime.now().toUtc();
+      _buildingSnapshot = _latestSnapshot;
+      for (final d in dedupedDevices) {
+        debugPrint(
+          '[${_ts()}] [REPO]   device src=${d.sourceAddress} name="${d.name}" model="${d.model}" hasProductInfo=${d.hasProductInfo} online=${d.online}',
+        );
+      }
+    }
+  }
+
+  void _applyEvent(BleGatewayEvent event) {
+    _latestEvent = event;
+    _recentEvents.add(event);
+    if (_recentEvents.length > 20) {
+      _recentEvents.removeAt(0);
+    }
+
+    switch (event.type) {
+      case BleGatewayEventType.requestSent:
+        _currentRequestId = event.requestId ?? _currentRequestId;
+        _requestPending = true;
+        _snapshotInProgress = true;
+        _lastError = null;
+        break;
+      case BleGatewayEventType.begin:
+        _currentRequestId = event.requestId ?? _currentRequestId;
+        _requestPending = true;
+        _snapshotInProgress = true;
+        _eventProgressExpected = event.count ?? _eventProgressExpected;
+        _eventProgressReceived = 0;
+        _lastError = null;
+        break;
+      case BleGatewayEventType.deviceProgress:
+        _snapshotInProgress = true;
+        _eventProgressExpected = event.total ?? _eventProgressExpected;
+        _eventProgressReceived = event.index ?? _eventProgressReceived;
+        break;
+      case BleGatewayEventType.complete:
+        _currentRequestId = event.requestId ?? _currentRequestId;
+        _requestPending = false;
+        _snapshotInProgress = false;
+        _eventProgressReceived = event.count ?? _eventProgressReceived;
+        _eventProgressExpected = event.count ?? _eventProgressExpected;
+        // Commit whatever was built — mirrors the timeout path for the case
+        // where the End binary arrived and complete=1 was never sent separately.
+        final completedSnapshot = _buildingSnapshot;
+        if (completedSnapshot != null && completedSnapshot.devices.isNotEmpty) {
+          final finalDevices = dedupeDevicesBySrc(completedSnapshot.devices);
+          _devices = finalDevices;
+          _latestSnapshot = completedSnapshot.copyWith(
+            devices: finalDevices,
+            snapshotInProgress: false,
+            requestPending: false,
+          );
+          _lastSnapshotAt = DateTime.now().toUtc();
+        }
+        break;
+      case BleGatewayEventType.timeout:
+        final timeoutRequestId = event.requestId;
+        final hasActiveRequest =
+            _requestPending || _snapshotInProgress || _buildingSnapshot != null;
+        if (!hasActiveRequest) {
+          break;
+        }
+        if (_currentRequestId != null &&
+            timeoutRequestId != null &&
+            timeoutRequestId != _currentRequestId) {
+          break;
+        }
+        _currentRequestId = timeoutRequestId ?? _currentRequestId;
+        _requestPending = false;
+        _snapshotInProgress = false;
+        _lastError = 'device_list request timed out';
+        // Some firmware builds emit snapshot headers/devices but never flip the
+        // final complete flag. If we collected any device lines, surface the
+        // best available partial snapshot instead of showing an empty list.
+        final pendingSnapshot = _buildingSnapshot;
+        if (pendingSnapshot != null && pendingSnapshot.devices.isNotEmpty) {
+          final partialDevices = dedupeDevicesBySrc(pendingSnapshot.devices);
+          _devices = partialDevices;
+          _latestSnapshot = pendingSnapshot.copyWith(
+            devices: partialDevices,
+            snapshotInProgress: false,
+            requestPending: false,
+          );
+          _lastSnapshotAt = DateTime.now().toUtc();
+        }
+        break;
+      case BleGatewayEventType.unknown:
+        break;
+    }
+  }
+
+  String _snapshotStatusLine(DeviceListSnapshot snapshot, int deviceCount) {
+    final received = snapshot.snapshotReceived ?? deviceCount;
+    final expected = snapshot.snapshotExpected;
+    final progress = expected == null ? '$received' : '$received/$expected';
+    if (snapshot.snapshotComplete) {
+      return 'Snapshot complete ($progress)';
+    }
+    return 'Snapshot in progress ($progress)';
+  }
+
+  String _eventStatusLine(BleGatewayEvent event) {
+    switch (event.type) {
+      case BleGatewayEventType.requestSent:
+        final requestId = event.requestId;
+        return requestId == null
+            ? 'Device list request sent'
+            : 'Device list request sent (id=$requestId)';
+      case BleGatewayEventType.begin:
+        final count = event.count;
+        return count == null
+            ? 'Receiving device list'
+            : 'Receiving device list (0/$count)';
+      case BleGatewayEventType.deviceProgress:
+        final index = event.index;
+        final total = event.total;
+        if (index == null || total == null) {
+          return 'Receiving device list';
+        }
+        return 'Receiving device list ($index/$total)';
+      case BleGatewayEventType.complete:
+        final count = event.count;
+        return count == null
+            ? 'Device list complete'
+            : 'Device list complete ($count devices)';
+      case BleGatewayEventType.timeout:
+        return 'Device list request timed out';
+      case BleGatewayEventType.unknown:
+        return _truncateStatusLine(event.rawLine);
+    }
+  }
+
+  String _truncateStatusLine(String line) {
+    const maxLength = 120;
+    if (line.length <= maxLength) {
+      return line;
+    }
+    return '${line.substring(0, maxLength - 3)}...';
+  }
+}
+
+List<N2kDeviceInfo> dedupeDevicesBySrc(Iterable<N2kDeviceInfo> devices) {
+  final latestBySrc = <int, N2kDeviceInfo>{};
+  for (final device in devices) {
+    latestBySrc[device.sourceAddress] = device;
+  }
+
+  final deduped = latestBySrc.values.toList(growable: false)
+    ..sort((left, right) => left.sourceAddress.compareTo(right.sourceAddress));
+  return List<N2kDeviceInfo>.unmodifiable(deduped);
+}
