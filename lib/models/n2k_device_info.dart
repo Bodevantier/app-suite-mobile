@@ -121,6 +121,37 @@ class N2kDeviceInfo {
   String get displayHardwareVersion => _displayText(modelVersion, 'unknown');
   String get displaySerialNumber => _displayText(serialNumber, 'unknown');
 
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'src': src,
+      'name': name,
+      'model': model,
+      'manufacturer': manufacturer,
+      'category': category,
+      'online': online,
+      if (lastSeen != null) 'lastSeen': lastSeen!.toIso8601String(),
+      'hasAddressClaim': hasAddressClaim,
+      'hasProductInfo': hasProductInfo,
+      'hasConfigurationInfo': hasConfigurationInfo,
+      'hasTxPgnList': hasTxPgnList,
+      'hasRxPgnList': hasRxPgnList,
+      'hasLiveWindData': hasLiveWindData,
+      if (serialNumber != null) 'serialNumber': serialNumber,
+      if (softwareVersion != null) 'softwareVersion': softwareVersion,
+      if (modelVersion != null) 'modelVersion': modelVersion,
+      if (manufacturerText != null) 'manufacturerText': manufacturerText,
+      if (installationDescription1 != null)
+        'installationDescription1': installationDescription1,
+      if (installationDescription2 != null)
+        'installationDescription2': installationDescription2,
+      if (deviceClass != null) 'deviceClass': deviceClass,
+      if (deviceFunction != null) 'deviceFunction': deviceFunction,
+      if (nameValue != null) 'nameValue': nameValue,
+      'supportedPgns': supportedPgns,
+      if (extraData.isNotEmpty) 'extraData': extraData,
+    };
+  }
+
   factory N2kDeviceInfo.fromJson(Map<String, dynamic> json) {
     final hasAddressClaim = _parseBool(json['hasAddressClaim']);
     final hasProductInfo = _parseBool(json['hasProductInfo']);

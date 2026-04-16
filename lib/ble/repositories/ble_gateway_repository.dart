@@ -18,6 +18,16 @@ class BleGatewayRepository extends ChangeNotifier {
   final BleGatewayEventParser _eventParser;
   final DeviceListTextParser _textParser;
 
+  /// Pre-populate the device list from a local cache (e.g. SharedPreferences).
+  /// Called before any BLE connection is made so the UI shows something useful
+  /// immediately. A real gateway snapshot will overwrite this when it arrives.
+  void seedDevices(List<N2kDeviceInfo> devices) {
+    if (devices.isEmpty) return;
+    _devices = List<N2kDeviceInfo>.unmodifiable(devices);
+    _lastStatusLine = 'From cache (${devices.length} devices)';
+    notifyListeners();
+  }
+
   final List<BleGatewayEvent> _recentEvents = <BleGatewayEvent>[];
   List<N2kDeviceInfo> _devices = const <N2kDeviceInfo>[];
   DeviceListSnapshot? _latestSnapshot;

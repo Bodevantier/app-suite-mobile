@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../controllers/ble_controller.dart';
 import '../models/n2k_device_info.dart';
+import '../services/wind_averages_service.dart';
 
 class WindDataPage extends StatefulWidget {
   const WindDataPage({
@@ -11,6 +12,7 @@ class WindDataPage extends StatefulWidget {
     required this.telemetryController,
     this.device,
     this.hasNavigationDevice = false,
+    this.windAverages,
     this.primaryActionLabel,
     this.onPrimaryAction,
   });
@@ -18,6 +20,7 @@ class WindDataPage extends StatefulWidget {
   final BleController telemetryController;
   final N2kDeviceInfo? device;
   final bool hasNavigationDevice;
+  final WindAveragesService? windAverages;
   final String? primaryActionLabel;
   final VoidCallback? onPrimaryAction;
 
@@ -61,13 +64,19 @@ class _WindDataPageState extends State<WindDataPage> {
       ),
       body: SafeArea(
         child: AnimatedBuilder(
-          animation: widget.telemetryController,
+          animation: Listenable.merge([
+            widget.telemetryController,
+            if (widget.windAverages != null) widget.windAverages!,
+          ]),
           builder: (context, _) {
             final telemetry = widget.telemetryController.telemetry;
             final windSpeed = telemetry.windSpeed;
             final windAngle = telemetry.windAngleDeg;
             final apparentWindSpeed = telemetry.apparentWindSpeedMs;
             final apparentWindAngle = telemetry.apparentWindAngleDeg;
+            final pageCount = 1 +
+                (widget.hasNavigationDevice ? 1 : 0) +
+                (widget.windAverages != null ? 1 : 0);
 
             return Padding(
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
@@ -129,12 +138,21 @@ class _WindDataPageState extends State<WindDataPage> {
                               telemetry.sogMs,
                             ),
                           ),
+                        if (widget.windAverages != null)
+                          _WindAveragesView(
+                            averages: widget.windAverages!,
+                            showKnots: _showWindSpeedInKnots,
+                            onUnitTap: _toggleWindSpeedUnit,
+                          ),
                       ],
                     ),
                   ),
                   const SizedBox(height: 14),
-                  if (widget.hasNavigationDevice)
-                    _WindPagerIndicator(activeIndex: _selectedPage),
+                  if (pageCount > 1)
+                    _WindPagerIndicator(
+                      activeIndex: _selectedPage,
+                      count: pageCount,
+                    ),
                   if (widget.primaryActionLabel != null) ...[
                     const SizedBox(height: 16),
                     SizedBox(
@@ -524,15 +542,19 @@ class _WindGaugePainter extends CustomPainter {
 }
 
 class _WindPagerIndicator extends StatelessWidget {
-  const _WindPagerIndicator({required this.activeIndex});
+  const _WindPagerIndicator({
+    required this.activeIndex,
+    this.count = 2,
+  });
 
   final int activeIndex;
+  final int count;
 
   @override
   Widget build(BuildContext context) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
-      children: List<Widget>.generate(2, (index) {
+      children: List<Widget>.generate(count, (index) {
         final isActive = index == activeIndex;
         return AnimatedContainer(
           duration: const Duration(milliseconds: 200),
@@ -545,6 +567,207 @@ class _WindPagerIndicator extends StatelessWidget {
           ),
         );
       }),
+    );
+  }
+}
+
+// ── Wind Averages page ───────────────────────────────────────────────────────
+
+class _WindAveragesView extends StatelessWidget {
+  const _WindAveragesView({
+    required this.averages,
+    required this.showKnots,
+    this.onUnitTap,
+  });
+
+  final WindAveragesService averages;
+  final bool showKnots;
+  final VoidCallback? onUnitTap;
+
+  String _fmt(double? mps) {
+    if (mps == null) return '--';
+    if (showKnots) return '${(mps * 1.94384).toStringAsFixed(1)} kn';
+    return '${mps.toStringAsFixed(1)} m/s';
+  }
+
+  String _fmtVmg(double? mps) {
+    if (mps == null) return '--';
+    final kn = mps * 1.94384;
+    return '${kn >= 0 ? '+' : ''}${kn.toStringAsFixed(1)} kn';
+  }
+
+  String _spanLabel(Duration span) {
+    if (span.inSeconds < 60) return '${span.inSeconds}s of data';
+    if (span.inMinutes < 60) return '${span.inMinutes} min of data';
+    return '${span.inHours}h ${span.inMinutes % 60}min of data';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final span = averages.collectionSpan;
+    final unitLabel = showKnots ? 'kn' : 'm/s';
+
+    return Container(
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xfff9fbff), Color(0xffedf3ff)],
+        ),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0xffd9e4ff), width: 1.2),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text(
+                'Averages',
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 18,
+                  color: Color(0xff111827),
+                ),
+              ),
+              const Spacer(),
+              GestureDetector(
+                onTap: onUnitTap,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xffffffff),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: const Color(0xffc7d2fe)),
+                  ),
+                  child: Text(
+                    unitLabel,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xff3b82f6),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            span.inSeconds < 2 ? 'Collecting data...' : _spanLabel(span),
+            style: const TextStyle(
+              fontSize: 12,
+              color: Color(0xff94a3b8),
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          // Header row
+          _tableRow(
+            label: '',
+            a: '60 s',
+            b: '5 min',
+            c: '30 min',
+            isHeader: true,
+          ),
+          const SizedBox(height: 8),
+
+          _tableRow(
+            label: 'TWS',
+            a: _fmt(averages.tws60s),
+            b: _fmt(averages.tws5min),
+            c: _fmt(averages.tws30min),
+          ),
+          const Divider(height: 16, color: Color(0xffe2e8f0)),
+
+          _tableRow(
+            label: 'AWS',
+            a: _fmt(averages.aws60s),
+            b: _fmt(averages.aws5min),
+            c: _fmt(averages.aws30min),
+          ),
+
+          const Spacer(),
+
+          // VMG row
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xffffffff),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xffdfe5ef)),
+            ),
+            child: Row(
+              children: [
+                const Text(
+                  'VMG',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    color: Color(0xff64748b),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Text(
+                  '(SOG × cos TWA)',
+                  style: TextStyle(fontSize: 12, color: Color(0xffadb5bd)),
+                ),
+                const Spacer(),
+                Text(
+                  _fmtVmg(averages.vmgMs),
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 18,
+                    color: averages.vmgMs == null
+                        ? const Color(0xff94a3b8)
+                        : averages.vmgMs! >= 0
+                            ? const Color(0xff16a34a)
+                            : const Color(0xffdc2626),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tableRow({
+    required String label,
+    required String a,
+    required String b,
+    required String c,
+    bool isHeader = false,
+  }) {
+    final style = isHeader
+        ? const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: Color(0xff94a3b8),
+          )
+        : const TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+            color: Color(0xff1e293b),
+          );
+    final labelStyle = isHeader
+        ? const TextStyle(fontSize: 12, color: Color(0xff94a3b8))
+        : const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: Color(0xff64748b),
+          );
+
+    return Row(
+      children: [
+        SizedBox(width: 44, child: Text(label, style: labelStyle)),
+        Expanded(child: Center(child: Text(a, style: style))),
+        Expanded(child: Center(child: Text(b, style: style))),
+        Expanded(child: Center(child: Text(c, style: style))),
+      ],
     );
   }
 }

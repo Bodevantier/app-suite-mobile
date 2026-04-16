@@ -4,8 +4,9 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   testWidgets('welcome flow renders', (tester) async {
+    final dependencies = await AppDependencies.standard();
     await tester.pumpWidget(
-      BleGatewayApp(dependencies: AppDependencies.standard()),
+      BleGatewayApp(dependencies: dependencies),
     );
 
     expect(find.text('Set up your BLE gateway'), findsOneWidget);
