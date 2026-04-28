@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:universal_ble/universal_ble.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 import '../../controllers/ble_controller.dart';
 import '../../models/gateway_command.dart';
@@ -22,6 +22,7 @@ class BleGatewayController extends ChangeNotifier {
   }) : _framer = framer ?? NewlineMessageFramer() {
     transport.addListener(_handleDependencyChanged);
     repository.addListener(_handleDependencyChanged);
+    telemetryController?.addListener(_handleDependencyChanged);
     _chunkSubscription = transport.chunks.listen(_handleChunk);
     _lastConnected = transport.isConnected;
   }
@@ -34,32 +35,99 @@ class BleGatewayController extends ChangeNotifier {
   late final StreamSubscription<BleTransportChunk> _chunkSubscription;
   bool _lastConnected = false;
 
-  List<BleDevice> get discoveredDevices => transport.devices;
-  BleDevice? get connectedDevice => transport.connectedDevice;
+  List<ScanResult> get discoveredDevices => transport.devices;
+  BluetoothDevice? get connectedDevice => transport.connectedDevice;
   bool get isScanning => transport.isScanning;
   bool get isConnecting => transport.isConnecting;
   bool get isConnected => transport.isConnected;
   bool get hasNotifyCharacteristic => transport.hasNotifyCharacteristic;
   bool get hasCommandCharacteristic => transport.hasCommandCharacteristic;
   String get bleStatus => transport.status;
+  bool get n2kScanInProgress => telemetryController?.n2kScanInProgress ?? false;
+  bool get n2kScanComplete => telemetryController?.n2kScanComplete ?? false;
   List<N2kDeviceInfo> get devices {
-    final snapshotDevices = repository.devices;
-    final decodedDevices =
-        telemetryController?.decodedDevices ?? const <N2kDeviceInfo>[];
+    // Merge binary (live-data flags) + text-snapshot (proper names).
+    // The STM32 sends a text snapshot every ~30 s with resolved device names;
+    // the binary N2K tracker has live wind/temperature flags and online status.
+    final binary = telemetryController?.decodedDevices ?? const <N2kDeviceInfo>[];
+    final text = repository.devices;
 
-    final hasSnapshotDevices = snapshotDevices.isNotEmpty;
-    final requestAttemptFinishedWithoutSnapshot =
-        snapshotDevices.isEmpty &&
-        repository.currentRequestId != null &&
-        !repository.requestPending &&
-        !repository.snapshotInProgress;
+    if (binary.isEmpty && text.isEmpty) {
+      return const <N2kDeviceInfo>[];
+    }
+    if (binary.isEmpty) {
+      return text.toList();
+    }
+    if (text.isEmpty) {
+      return List<N2kDeviceInfo>.unmodifiable(binary);
+    }
 
-    return _mergeDevices(
-      snapshotDevices,
-      decodedDevices,
-      allowFallbackTelemetry:
-          hasSnapshotDevices || requestAttemptFinishedWithoutSnapshot,
-    );
+    // Build merged map keyed by source address.
+    final bySource = <int, N2kDeviceInfo>{};
+    for (final d in binary) {
+      bySource[d.src] = d;
+    }
+    for (final t in text) {
+      final b = bySource[t.src];
+      if (b == null) {
+        // Device only known via text path.
+        bySource[t.src] = t;
+      } else {
+        // Overlay text-path names when binary has generic placeholders.
+        // The text path knows the authoritative device function/category from
+        // the STM32 (which reads it from N2K AddressClaim). When the text path
+        // says a device is a temperature sensor, clear the live-wind flag that
+        // the binary tracker may have set because PGN 130306 happens to be
+        // broadcast by that node.
+        // Use text-path category when binary has no AddressClaim yet.
+        final textCategory = (b.category == 'unknown' && t.category != 'unknown')
+            ? t.category
+            : b.category;
+        final isTextTemp = textCategory == 'temperature';
+        bySource[t.src] = b.copyWith(
+          name: _pickBetter(t.name, b.name) ? t.name : b.name,
+          model: _pickBetterModel(t.model, b.model) ? t.model : b.model,
+          manufacturer: _pickBetterMfr(t.manufacturer, b.manufacturer)
+              ? t.manufacturer
+              : b.manufacturer,
+          category: textCategory,
+          hasProductInfo: b.hasProductInfo || t.hasProductInfo,
+          hasAddressClaim: b.hasAddressClaim || t.hasAddressClaim,
+          // If the authoritative category is temperature, suppress the live-wind
+          // flag so isWindDevice stays false and the correct icon/chip shows.
+          hasLiveWindData: isTextTemp ? false : b.hasLiveWindData,
+        );
+      }
+    }
+    final merged = bySource.values
+        .where((d) => !d.isBleGatewayDevice)
+        .toList()
+      ..sort((a, b) => a.src.compareTo(b.src));
+    return List<N2kDeviceInfo>.unmodifiable(merged);
+  }
+
+  /// Returns true if [candidate] is a better name than [current].
+  static bool _pickBetter(String candidate, String current) {
+    if (candidate == '-' || candidate.isEmpty) return false;
+    final lc = current.toLowerCase();
+    return lc.startsWith('n2k node src') ||
+        lc == 'unknown device' ||
+        lc == 'unknown' ||
+        current == '-';
+  }
+
+  static bool _pickBetterModel(String candidate, String current) {
+    if (candidate == '-' || candidate.isEmpty) return false;
+    final lc = current.toLowerCase();
+    return lc == 'unknown model' || current == '-';
+  }
+
+  static bool _pickBetterMfr(String candidate, String current) {
+    if (candidate == '-' || candidate.isEmpty) return false;
+    final lc = current.toLowerCase();
+    return lc.startsWith('manufacturer code') ||
+        lc == 'unknown manufacturer' ||
+        current == '-';
   }
   String get statusLine => repository.lastStatusLine;
   String? get lastError => repository.lastError;
@@ -91,8 +159,8 @@ class BleGatewayController extends ChangeNotifier {
     return transport.stopScan();
   }
 
-  Future<void> connect(BleDevice device) {
-    return transport.connect(device);
+  Future<void> connect(ScanResult result) {
+    return transport.connect(result);
   }
 
   Future<void> disconnect() async {
@@ -104,13 +172,14 @@ class BleGatewayController extends ChangeNotifier {
   }
 
   Future<void> requestDeviceList() async {
-    repository.markRequestQueued();
+    // Start the scan window BEFORE writing the command so any AddressClaim
+    // frames already in the BLE notification pipeline are captured, not lost.
+    telemetryController?.startDeviceScan();
     try {
       await transport.writeCommandLine(
         GatewayCommand.requestDeviceList().toCommandLine(),
       );
     } catch (error) {
-      repository.markWriteFailed(error);
       rethrow;
     }
   }
@@ -157,61 +226,9 @@ class BleGatewayController extends ChangeNotifier {
   void dispose() {
     transport.removeListener(_handleDependencyChanged);
     repository.removeListener(_handleDependencyChanged);
+    telemetryController?.removeListener(_handleDependencyChanged);
     unawaited(_chunkSubscription.cancel());
     super.dispose();
   }
 
-  List<N2kDeviceInfo> _mergeDevices(
-    List<N2kDeviceInfo> snapshotDevices,
-    List<N2kDeviceInfo> decodedDevices,
-    {required bool allowFallbackTelemetry}
-  ) {
-    // Snapshot is authoritative for device identity (name, model, category).
-    // Start from snapshot; decoded devices only augment with live-frame data.
-    final merged = <int, N2kDeviceInfo>{
-      for (final d in snapshotDevices) d.sourceAddress: d,
-    };
-
-    for (final decoded in decodedDevices) {
-      final existing = merged[decoded.sourceAddress];
-      if (existing != null) {
-        // Snapshot already covers this src — merge in live-frame flags only.
-        merged[decoded.sourceAddress] = existing.copyWith(
-          online: existing.online || decoded.online,
-          lastSeen: existing.lastSeen ?? decoded.lastSeen,
-          hasAddressClaim: existing.hasAddressClaim || decoded.hasAddressClaim,
-          hasProductInfo: existing.hasProductInfo || decoded.hasProductInfo,
-          hasConfigurationInfo:
-              existing.hasConfigurationInfo || decoded.hasConfigurationInfo,
-          hasTxPgnList: existing.hasTxPgnList || decoded.hasTxPgnList,
-          hasRxPgnList: existing.hasRxPgnList || decoded.hasRxPgnList,
-          hasLiveWindData: existing.hasLiveWindData || decoded.hasLiveWindData,
-          serialNumber: existing.serialNumber ?? decoded.serialNumber,
-          softwareVersion: existing.softwareVersion ?? decoded.softwareVersion,
-          modelVersion: existing.modelVersion ?? decoded.modelVersion,
-          manufacturerText: existing.manufacturerText ?? decoded.manufacturerText,
-          installationDescription1:
-              existing.installationDescription1 ?? decoded.installationDescription1,
-          installationDescription2:
-              existing.installationDescription2 ?? decoded.installationDescription2,
-          supportedPgns: existing.supportedPgns.isEmpty
-              ? decoded.supportedPgns
-              : existing.supportedPgns,
-          extraData: <String, dynamic>{...decoded.extraData, ...existing.extraData},
-        );
-        } else if (!decoded.hasGatewayFallbackName ||
-          (allowFallbackTelemetry &&
-            (decoded.hasProductInfo || decoded.hasConfigurationInfo))) {
-        // Not in snapshot but carries real data from live CAN frames — show it.
-        // Fallback-name devices are suppressed on initial page load, but shown
-        // only when telemetry has real identity (product/config) and snapshot
-        // did not arrive (for timeout paths).
-        merged[decoded.sourceAddress] = decoded;
-      }
-    }
-
-    final values = merged.values.toList(growable: false)
-      ..sort((a, b) => a.sourceAddress.compareTo(b.sourceAddress));
-    return List<N2kDeviceInfo>.unmodifiable(values);
-  }
 }

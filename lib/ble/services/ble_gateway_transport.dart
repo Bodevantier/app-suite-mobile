@@ -2,31 +2,28 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
-import 'package:universal_ble/universal_ble.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 @visibleForTesting
 bool isTransientBleConnectError(Object error) {
   final message = '$error'.toLowerCase();
-  return message.contains('unknown error 133') ||
-      message.contains('gatt 133') ||
-      message.contains('status=133');
+  // Android GATT error 133 (ANDROID_SPECIFIC_ERROR) is a transient
+  // error that almost always succeeds on the next attempt.
+  return message.contains('133') || message.contains('android_specific_error');
 }
 
 @visibleForTesting
-bool isBleGatewayCandidate(BleDevice device, {required String serviceUuid}) {
-  final canonicalServiceUuid = serviceUuid.trim().toLowerCase();
-  final advertisedServices = device.services
-      .map((service) => service.trim().toLowerCase())
-      .toList(growable: false);
-  if (advertisedServices.contains(canonicalServiceUuid)) {
+bool isBleGatewayCandidate(ScanResult result, {required String serviceUuid}) {
+  final target = Guid(serviceUuid);
+  if (result.advertisementData.serviceUuids.contains(target)) {
     return true;
   }
-
-  final rawName = (device.name ?? device.rawName ?? '').trim().toLowerCase();
-  if (rawName.isEmpty) {
-    return false;
-  }
-
+  final rawName = (result.advertisementData.advName.isNotEmpty
+          ? result.advertisementData.advName
+          : result.device.platformName)
+      .trim()
+      .toLowerCase();
+  if (rawName.isEmpty) return false;
   return rawName.startsWith('sdolve') ||
       rawName.contains('n2k ble') ||
       rawName.contains('ble gateway');
@@ -57,27 +54,28 @@ class BleGatewayTransportService extends ChangeNotifier {
   final String binaryNotifyCharacteristicUuid;
   final String commandCharacteristicUuid;
 
-  final List<BleDevice> _devices = <BleDevice>[];
+  var _devices = <ScanResult>[];
   final StreamController<BleTransportChunk> _chunkController =
       StreamController<BleTransportChunk>.broadcast();
 
-  StreamSubscription<BleDevice>? _scanSub;
-  StreamSubscription<bool>? _connectionSub;
+  StreamSubscription<List<ScanResult>>? _scanSub;
+  StreamSubscription<bool>? _isScanSub;
+  StreamSubscription<BluetoothAdapterState>? _adapterStateSub;
+  StreamSubscription<BluetoothConnectionState>? _connectionSub;
   StreamSubscription<dynamic>? _textNotifySub;
   StreamSubscription<dynamic>? _binaryNotifySub;
 
-  BleDevice? _connectedDevice;
-  BleCharacteristic? _notifyCharacteristic;
-  BleCharacteristic? _binaryNotifyCharacteristic;
-  BleCharacteristic? _commandCharacteristic;
+  BluetoothDevice? _connectedDevice;
+  BluetoothCharacteristic? _notifyCharacteristic;
+  BluetoothCharacteristic? _binaryNotifyCharacteristic;
+  BluetoothCharacteristic? _commandCharacteristic;
   bool _initialized = false;
-  bool _isScanning = false;
   bool _isConnecting = false;
   String _status = 'Initializing BLE...';
 
-  List<BleDevice> get devices => List.unmodifiable(_devices);
-  BleDevice? get connectedDevice => _connectedDevice;
-  bool get isScanning => _isScanning;
+  List<ScanResult> get devices => List.unmodifiable(_devices);
+  BluetoothDevice? get connectedDevice => _connectedDevice;
+  bool get isScanning => FlutterBluePlus.isScanningNow;
   bool get isConnecting => _isConnecting;
   bool get isConnected => _connectedDevice != null;
   bool get hasNotifyCharacteristic => _notifyCharacteristic != null;
@@ -87,114 +85,128 @@ class BleGatewayTransportService extends ChangeNotifier {
   Stream<BleTransportChunk> get chunks => _chunkController.stream;
 
   Future<void> ensureInitialized() async {
-    if (_initialized) {
-      return;
-    }
+    if (_initialized) return;
     _initialized = true;
 
-    try {
-      await UniversalBle.requestPermissions(withAndroidFineLocation: false);
-      _scanSub = UniversalBle.scanStream.listen(
-        (device) {
-          if (!isBleGatewayCandidate(device, serviceUuid: gatewayServiceUuid)) {
-            return;
-          }
+    // Retain scan results between scans so the device list stays visible
+    // after a scan completes.  onScanResults would clear between scans.
+    _scanSub = FlutterBluePlus.scanResults.listen(
+      (results) {
+        _devices = results
+            .where(
+              (r) => isBleGatewayCandidate(r, serviceUuid: gatewayServiceUuid),
+            )
+            .toList();
+        notifyListeners();
+      },
+      onError: (Object error) {
+        _status = 'Scan error: $error';
+        notifyListeners();
+      },
+    );
 
-          final index = _devices.indexWhere(
-            (item) => item.deviceId == device.deviceId,
-          );
-          if (index >= 0) {
-            _devices[index] = device;
-          } else {
-            _devices.add(device);
-          }
-          notifyListeners();
-        },
-        onError: (Object error) {
-          _isScanning = false;
-          _status = 'Scan error: $error';
-          notifyListeners();
-        },
-      );
-      _status = 'Ready. Tap Start scan.';
-    } catch (error) {
-      _status = 'BLE init failed: $error';
-    }
+    // Rebuild the UI whenever scanning state changes so buttons enable/disable.
+    _isScanSub = FlutterBluePlus.isScanning.listen((_) => notifyListeners());
 
+    // Track adapter state so the UI reflects BT on/off/unknown reactively.
+    // adapterStateNow may return unknown on startup before Android is ready.
+    _adapterStateSub = FlutterBluePlus.adapterState.listen((state) {
+      if (state == BluetoothAdapterState.on) {
+        if (!FlutterBluePlus.isScanningNow && _connectedDevice == null) {
+          _status = 'Ready. Tap Start scan.';
+        }
+      } else {
+        _status = 'Bluetooth is ${state.name}.';
+      }
+      notifyListeners();
+    });
+
+    // Set initial status based on current adapter state, but treat unknown
+    // as 'wait for the stream event' rather than surfacing it as an error.
+    final initial = FlutterBluePlus.adapterStateNow;
+    _status = initial == BluetoothAdapterState.on
+        ? 'Ready. Tap Start scan.'
+        : 'Waiting for Bluetooth...';
     notifyListeners();
   }
 
   Future<void> startScan() async {
-    try {
-      final availability = await UniversalBle.getBluetoothAvailabilityState();
-      if (availability != AvailabilityState.poweredOn) {
-        _status = 'Bluetooth is ${availability.name}.';
-        notifyListeners();
-        return;
+    // Wait up to 3 s for the adapter to come on if it is still initialising.
+    if (FlutterBluePlus.adapterStateNow != BluetoothAdapterState.on) {
+      try {
+        await FlutterBluePlus.adapterState
+            .firstWhere((s) => s == BluetoothAdapterState.on)
+            .timeout(const Duration(seconds: 3));
+      } catch (_) {
+        // Timed out — adapter is genuinely off.
       }
+    }
+    final adapterState = FlutterBluePlus.adapterStateNow;
+    if (adapterState != BluetoothAdapterState.on) {
+      _status = 'Bluetooth is ${adapterState.name}. Please enable Bluetooth.';
+      notifyListeners();
+      return;
+    }
 
-      await UniversalBle.stopScan();
-      _isScanning = true;
+    try {
+      if (FlutterBluePlus.isScanningNow) {
+        await FlutterBluePlus.stopScan();
+      }
       _status = 'Scanning...';
       notifyListeners();
 
-      await UniversalBle.startScan(
-        scanFilter: ScanFilter(
-          withServices: <String>[gatewayServiceUuid],
-          withNamePrefix: const <String>['SDolve'],
-        ),
-        platformConfig: PlatformConfig(
-          android: AndroidOptions(requestLocationPermission: false),
-        ),
+      // Filter by the gateway service UUID which the ESP32 actively advertises.
+      // FBP applies this as a native OS-level filter on Android for efficiency.
+      await FlutterBluePlus.startScan(
+        withServices: [Guid(gatewayServiceUuid)],
       );
     } catch (error) {
-      _isScanning = false;
       _status = 'Scan failed: $error';
       notifyListeners();
     }
   }
 
   Future<void> stopScan() async {
-    await UniversalBle.stopScan();
-    _isScanning = false;
+    await FlutterBluePlus.stopScan();
     _status = 'Scan stopped.';
     notifyListeners();
   }
 
-  Future<void> connect(BleDevice device) async {
+  Future<void> connect(ScanResult result) async {
+    if (_isConnecting) return;
     const settleDelay = Duration(milliseconds: 350);
     const retryDelay = Duration(milliseconds: 900);
 
+    final device = result.device;
+    final deviceName = device.platformName.isNotEmpty
+        ? device.platformName
+        : device.remoteId.str;
+
     try {
       _isConnecting = true;
-      _status = 'Connecting to ${device.name ?? device.deviceId}...';
+      _status = 'Connecting to $deviceName...';
       notifyListeners();
 
       await _resetBeforeConnect(device);
       await Future<void>.delayed(settleDelay);
 
       Object? lastError;
-      final maxAttempts = defaultTargetPlatform == TargetPlatform.android
-          ? 2
-          : 1;
+      final maxAttempts =
+          defaultTargetPlatform == TargetPlatform.android ? 2 : 1;
       for (var attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
           if (attempt > 1) {
-            _status =
-                'Retrying connection to ${device.name ?? device.deviceId}...';
+            _status = 'Retrying connection to $deviceName...';
             notifyListeners();
           }
-
           await _connectOnce(device);
           return;
         } catch (error) {
           lastError = error;
           await _resetAfterFailedConnect(device);
-
           if (attempt >= maxAttempts || !isTransientBleConnectError(error)) {
             break;
           }
-
           await Future<void>.delayed(retryDelay);
         }
       }
@@ -212,10 +224,7 @@ class BleGatewayTransportService extends ChangeNotifier {
 
   Future<void> disconnect() async {
     final device = _connectedDevice;
-    if (device == null) {
-      return;
-    }
-
+    if (device == null) return;
     try {
       await _unsubscribe();
       await _connectionSub?.cancel();
@@ -229,38 +238,39 @@ class BleGatewayTransportService extends ChangeNotifier {
   }
 
   Future<void> shutdown() async {
-    try {
-      await stopScan();
-      await _unsubscribe();
-      await _scanSub?.cancel();
-      _scanSub = null;
-      final device = _connectedDevice;
-      if (device != null) {
-        await device.disconnect();
-      }
-    } catch (_) {}
+    try { await FlutterBluePlus.stopScan(); } catch (_) {}
+    await _scanSub?.cancel();
+    await _isScanSub?.cancel();
+    await _adapterStateSub?.cancel();
+    _scanSub = null;
+    _isScanSub = null;
+    _adapterStateSub = null;
+    await _unsubscribe();
+    final device = _connectedDevice;
+    if (device != null) {
+      try { await device.disconnect(); } catch (_) {}
+    }
   }
 
-  Future<void> _connectOnce(BleDevice device) async {
-    await device.connect(timeout: const Duration(seconds: 12));
-    try {
-      await device.requestMtu(256);
-    } catch (_) {}
+  Future<void> _connectOnce(BluetoothDevice device) async {
+    // Monitor connection state BEFORE calling connect() so we catch any
+    // disconnection that occurs during service discovery or subscribe.
+    // FBP streams never throw, so no onError handler is needed.
+    _connectionSub = device.connectionState.listen((state) {
+      if (state == BluetoothConnectionState.disconnected &&
+          _connectedDevice?.remoteId == device.remoteId) {
+        unawaited(_handleDisconnectCleanup(autoStatus: 'Disconnected'));
+      }
+    });
 
-    _connectionSub = device.connectionStream.listen(
-      (isConnected) {
-        if (!isConnected && _connectedDevice?.deviceId == device.deviceId) {
-          unawaited(_handleDisconnectCleanup(autoStatus: 'Disconnected'));
-          return;
-        }
-        _status = 'Connection: ${isConnected ? 'connected' : 'disconnected'}';
-        notifyListeners();
-      },
-      onError: (Object error) {
-        _isConnecting = false;
-        _status = 'Connection error: $error';
-        notifyListeners();
-      },
+    // Request MTU 512 on Android so multi-frame binary packets arrive intact.
+    // mtu: null would silently leave the default 23-byte ATT MTU (20-byte payload)
+    // which truncates every binary notification and causes all parses to fail.
+    await device.connect(
+      license: License.free,
+      autoConnect: false,
+      mtu: 512,
+      timeout: const Duration(seconds: 12),
     );
 
     final services = await device.discoverServices();
@@ -297,11 +307,18 @@ class BleGatewayTransportService extends ChangeNotifier {
     _connectedDevice = device;
     _isConnecting = false;
 
-    if ((_notifyCharacteristic != null) ||
-        (_binaryNotifyCharacteristic != null)) {
+    if (_notifyCharacteristic != null || _binaryNotifyCharacteristic != null) {
       await _subscribe();
-      await _readOnce();
     }
+
+    // Guard: if the connectionState stream fired a disconnect while we were
+    // doing service discovery or subscribe, _connectedDevice has been cleared.
+    // Surface that as an error so the caller can reset and retry.
+    if (_connectedDevice == null) {
+      throw StateError('Connection lost during characteristic setup.');
+    }
+
+    await _readOnce();
 
     _status = _commandCharacteristic == null
         ? 'Connected. Command characteristic missing.'
@@ -309,26 +326,26 @@ class BleGatewayTransportService extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _resetBeforeConnect(BleDevice device) async {
+  Future<void> _resetBeforeConnect(BluetoothDevice device) async {
     try {
-      await UniversalBle.stopScan();
+      await FlutterBluePlus.stopScan();
     } catch (_) {}
-    _isScanning = false;
 
     await _connectionSub?.cancel();
     _connectionSub = null;
     await _unsubscribe();
+    // Only disconnect what we know is connected. Calling disconnect() on a
+    // device that is not connected causes Android to open a transient GATT
+    // client just to close it, creating spurious connect+cancelOpen log
+    // noise and occasionally triggering race conditions.
     await _disconnectQuietly(_connectedDevice);
-    if (_connectedDevice?.deviceId != device.deviceId) {
-      await _disconnectQuietly(device);
-    }
     _connectedDevice = null;
     _notifyCharacteristic = null;
     _binaryNotifyCharacteristic = null;
     _commandCharacteristic = null;
   }
 
-  Future<void> _resetAfterFailedConnect(BleDevice device) async {
+  Future<void> _resetAfterFailedConnect(BluetoothDevice device) async {
     await _connectionSub?.cancel();
     _connectionSub = null;
     await _unsubscribe();
@@ -339,7 +356,7 @@ class BleGatewayTransportService extends ChangeNotifier {
     _commandCharacteristic = null;
   }
 
-  Future<void> _disconnectQuietly(BleDevice? device) async {
+  Future<void> _disconnectQuietly(BluetoothDevice? device) async {
     if (device == null) {
       return;
     }
@@ -361,20 +378,16 @@ class BleGatewayTransportService extends ChangeNotifier {
     if (characteristic == null) {
       throw StateError('Command characteristic not available.');
     }
-
-    final supportsWrite = characteristic.properties.contains(
-      CharacteristicProperty.write,
-    );
-    final supportsWriteWithoutResponse = characteristic.properties.contains(
-      CharacteristicProperty.writeWithoutResponse,
-    );
-
-    if (!supportsWrite && !supportsWriteWithoutResponse) {
+    if (!characteristic.properties.write &&
+        !characteristic.properties.writeWithoutResponse) {
       throw StateError('Command characteristic is not writable.');
     }
-
     final bytes = utf8.encode(line);
-    await characteristic.write(bytes, withResponse: supportsWrite);
+    // FBP: withoutResponse:true = write-without-response, false = with-response.
+    await characteristic.write(
+      bytes,
+      withoutResponse: !characteristic.properties.write,
+    );
     _status = 'Sent ${line.trim()}';
     notifyListeners();
   }
@@ -390,13 +403,8 @@ class BleGatewayTransportService extends ChangeNotifier {
 
   Future<void> _readOnce() async {
     final characteristic = _notifyCharacteristic;
-    if (characteristic == null) {
-      return;
-    }
-    if (!characteristic.properties.contains(CharacteristicProperty.read)) {
-      return;
-    }
-
+    if (characteristic == null) return;
+    if (!characteristic.properties.read) return;
     try {
       final value = await characteristic.read();
       _chunkController.add(
@@ -408,86 +416,63 @@ class BleGatewayTransportService extends ChangeNotifier {
   Future<void> _subscribe() async {
     await _textNotifySub?.cancel();
     await _binaryNotifySub?.cancel();
-    _textNotifySub = await _subscribeCharacteristic(
-      _notifyCharacteristic,
-      isBinary: false,
-    );
-    _binaryNotifySub = await _subscribeCharacteristic(
-      _binaryNotifyCharacteristic,
-      isBinary: true,
-    );
+    _textNotifySub = null;
+    _binaryNotifySub = null;
+    // Subscribe each characteristic independently. A failure on the binary
+    // characteristic does not abort the text channel and vice-versa.
+    try {
+      _textNotifySub = await _subscribeCharacteristic(
+        _notifyCharacteristic,
+        isBinary: false,
+      );
+    } catch (e) {
+      _status = 'Text notify subscribe error: $e';
+    }
+    try {
+      _binaryNotifySub = await _subscribeCharacteristic(
+        _binaryNotifyCharacteristic,
+        isBinary: true,
+      );
+    } catch (e) {
+      _status = 'Binary notify subscribe error: $e';
+    }
   }
 
-  Future<StreamSubscription<dynamic>?> _subscribeCharacteristic(
-    BleCharacteristic? characteristic, {
+  Future<StreamSubscription<List<int>>?> _subscribeCharacteristic(
+    BluetoothCharacteristic? characteristic, {
     required bool isBinary,
   }) async {
-    if (characteristic == null) {
+    if (characteristic == null) return null;
+    if (!characteristic.properties.notify &&
+        !characteristic.properties.indicate) {
       return null;
     }
 
-    if (characteristic.properties.contains(CharacteristicProperty.notify)) {
-      await characteristic.notifications.subscribe();
-      return characteristic.notifications.listen(
-        (dynamic value) {
-          _emitChunkFromNotifyValue(value, isBinary: isBinary);
-        },
-        onError: (Object error) {
-          _status = 'Notify error: $error';
-          notifyListeners();
-        },
-      );
-    }
-
-    if (characteristic.properties.contains(CharacteristicProperty.indicate)) {
-      await characteristic.indications.subscribe();
-      return characteristic.indications.listen(
-        (dynamic value) {
-          _emitChunkFromNotifyValue(value, isBinary: isBinary);
-        },
-        onError: (Object error) {
-          _status = 'Notify error: $error';
-          notifyListeners();
-        },
-      );
-    }
-
-    return null;
-  }
-
-  void _emitChunkFromNotifyValue(dynamic value, {required bool isBinary}) {
-    if (value is List<int>) {
+    // Register the listener BEFORE calling setNotifyValue so we don't miss
+    // the first notification that may arrive immediately after enabling.
+    // FBP streams never throw, so no onError handler is needed.
+    final sub = characteristic.onValueReceived.listen((value) {
       _chunkController.add(
         BleTransportChunk(bytes: value, source: 'notify', isBinary: isBinary),
       );
-      return;
-    }
+    });
 
-    if (value is List) {
-      final bytes = value.whereType<int>().toList(growable: false);
-      if (bytes.isNotEmpty) {
-        _chunkController.add(
-          BleTransportChunk(bytes: bytes, source: 'notify', isBinary: isBinary),
-        );
-      }
-    }
+    await characteristic.setNotifyValue(true);
+    return sub;
   }
 
   Future<void> _unsubscribe() async {
-    final textCharacteristic = _notifyCharacteristic;
-    final binaryCharacteristic = _binaryNotifyCharacteristic;
     await _textNotifySub?.cancel();
     await _binaryNotifySub?.cancel();
     _textNotifySub = null;
     _binaryNotifySub = null;
-    if (textCharacteristic != null) {
+    // Only disable the CCCD if the device is still connected; setNotifyValue
+    // will fail (and is pointless) if the connection is already gone.
+    final device = _connectedDevice;
+    if (device != null && device.isConnected) {
+      try { await _notifyCharacteristic?.setNotifyValue(false); } catch (_) {}
       try {
-        await textCharacteristic.unsubscribe();
-      } catch (_) {}
-    }
-    if (binaryCharacteristic != null) {
-      try {
-        await binaryCharacteristic.unsubscribe();
+        await _binaryNotifyCharacteristic?.setNotifyValue(false);
       } catch (_) {}
     }
   }
@@ -502,30 +487,27 @@ class BleGatewayTransportService extends ChangeNotifier {
     notifyListeners();
   }
 
-  BleCharacteristic? _findCharacteristicByUuid(
-    List<BleService> services,
+  BluetoothCharacteristic? _findCharacteristicByUuid(
+    List<BluetoothService> services,
     String targetUuid,
   ) {
+    final target = Guid(targetUuid);
     for (final service in services) {
-      for (final characteristic in service.characteristics) {
-        if (_canonicalUuid(characteristic.uuid) == _canonicalUuid(targetUuid)) {
-          return characteristic;
-        }
+      for (final c in service.characteristics) {
+        if (c.characteristicUuid == target) return c;
       }
     }
     return null;
   }
 
-  BleService? _findServiceByUuid(List<BleService> services, String targetUuid) {
+  BluetoothService? _findServiceByUuid(
+    List<BluetoothService> services,
+    String targetUuid,
+  ) {
+    final target = Guid(targetUuid);
     for (final service in services) {
-      if (_canonicalUuid(service.uuid) == _canonicalUuid(targetUuid)) {
-        return service;
-      }
+      if (service.serviceUuid == target) return service;
     }
     return null;
-  }
-
-  String _canonicalUuid(String uuid) {
-    return uuid.trim().toLowerCase();
   }
 }

@@ -120,36 +120,32 @@ class _DeviceSetupPageState extends State<DeviceSetupPage> {
                 else
                   ...devices.map((device) {
                     final isAdded = widget.setupController.isAdded(device);
-
-                    return Card(
-                      child: ListTile(
-                        title: Text(device.displayName),
-                        subtitle: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('Source ${device.sourceAddress}'),
-                            Text(
-                              '${device.displayCategory} • ${device.displayModel}',
-                            ),
-                            if (device.isWindDevice) const Text('Wind page'),
-                          ],
+                    final card = _SetupDeviceCard(
+                      device: device,
+                      isAdded: isAdded,
+                      onAdd: () => widget.setupController.addDevice(device),
+                      onRemove: isAdded
+                          ? () => widget.setupController.removeDevice(device)
+                          : null,
+                      onTap: () => widget.onOpenDevice(device),
+                    );
+                    if (!isAdded) return card;
+                    return Dismissible(
+                      key: ValueKey(device.sourceAddress),
+                      direction: DismissDirection.endToStart,
+                      background: Container(
+                        alignment: Alignment.centerRight,
+                        padding: const EdgeInsets.only(right: 20),
+                        margin: const EdgeInsets.only(bottom: 10),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade400,
+                          borderRadius: BorderRadius.circular(12),
                         ),
-                        trailing: isAdded
-                            ? Text(
-                                'Added',
-                                style: TextStyle(
-                                  color: Colors.green.shade700,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              )
-                            : FilledButton(
-                                onPressed: () {
-                                  widget.setupController.addDevice(device);
-                                },
-                                child: const Text('Add'),
-                              ),
-                        onTap: () => widget.onOpenDevice(device),
+                        child: const Icon(Icons.delete_outline, color: Colors.white),
                       ),
+                      onDismissed: (_) =>
+                          widget.setupController.removeDevice(device),
+                      child: card,
                     );
                   }),
               ],
@@ -158,5 +154,123 @@ class _DeviceSetupPageState extends State<DeviceSetupPage> {
         );
       },
     );
+  }
+}
+
+// ── Setup device card ────────────────────────────────────────────────────────
+
+class _SetupDeviceCard extends StatelessWidget {
+  const _SetupDeviceCard({
+    required this.device,
+    required this.isAdded,
+    required this.onAdd,
+    required this.onTap,
+    this.onRemove,
+  });
+
+  final N2kDeviceInfo device;
+  final bool isAdded;
+  final VoidCallback onAdd;
+  final VoidCallback onTap;
+  final VoidCallback? onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    final icon = _iconFor(device);
+    final color = _colorFor(device, cs);
+
+    // Temperature must be checked before wind.
+    final pageLabel = device.isTemperatureDevice
+        ? 'Temperature page'
+        : device.isWindDevice
+            ? 'Wind page'
+            : device.isNavigationDevice
+                ? 'Navigation page'
+                : 'Details';
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      elevation: 1,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              // Icon bubble
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: color, size: 22),
+              ),
+              const SizedBox(width: 14),
+              // Name + subtitle
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      device.displayName,
+                      style: tt.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'src ${device.sourceAddress} · $pageLabel',
+                      style: tt.bodySmall?.copyWith(
+                        color: cs.onSurface.withOpacity(0.6),
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              // Add / Added button
+              isAdded
+                  ? Text(
+                      'Added',
+                      style: tt.labelMedium?.copyWith(
+                        color: Colors.green.shade700,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    )
+                  : FilledButton(
+                      onPressed: onAdd,
+                      child: const Text('Add'),
+                    ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static IconData _iconFor(N2kDeviceInfo d) {
+    if (d.isBleGatewayDevice) return Icons.bluetooth;
+    if (d.isTemperatureDevice) return Icons.thermostat;
+    if (d.isWindDevice) return Icons.air;
+    if (d.isNavigationDevice) return Icons.satellite_alt;
+    return Icons.sensors;
+  }
+
+  static Color _colorFor(N2kDeviceInfo d, ColorScheme cs) {
+    if (d.isBleGatewayDevice) return cs.primary;
+    if (d.isTemperatureDevice) return Colors.orange.shade700;
+    if (d.isWindDevice) return Colors.blue.shade600;
+    if (d.isNavigationDevice) return Colors.green.shade700;
+    return cs.secondary;
   }
 }

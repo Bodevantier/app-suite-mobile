@@ -8,8 +8,8 @@ import '../models/n2k_device_info.dart';
 import '../pages/ble_monitor_page.dart';
 import '../pages/device_setup_page.dart';
 import '../pages/n2k_device_detail_page.dart';
-import '../pages/n2k_devices_page.dart';
 import '../pages/navigation_data_page.dart';
+import '../pages/temperature_data_page.dart';
 import '../pages/welcome_page.dart';
 import '../pages/wind_data_page.dart';
 import 'app_dependencies.dart';
@@ -98,7 +98,7 @@ Future<void> _openBleSetupFlow(
         onConnectionReady: (monitorContext) async {
           // Remember this gateway and start auto-connect for future launches.
           final deviceId =
-              dependencies.bleGatewayController.connectedDevice?.deviceId;
+              dependencies.bleGatewayController.connectedDevice?.remoteId.str;
           if (deviceId != null) {
             unawaited(dependencies.preferences.saveKnownGatewayId(deviceId));
             dependencies.autoConnectService.start(deviceId);
@@ -229,35 +229,32 @@ class AppHomePage extends StatelessWidget {
                         runSpacing: 12,
                         children: [
                           FilledButton(
-                            onPressed: () =>
-                                _openBleSetupFlow(context, dependencies),
-                            child: const Text('Add more devices'),
-                          ),
-                          OutlinedButton(
                             onPressed: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute<void>(
-                                  builder: (_) => BleMonitorPage(
-                                    controller:
+                              if (isConnected) {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (ctx) => DeviceSetupPage(
+                                      controller:
+                                          dependencies.bleGatewayController,
+                                      setupController:
+                                          dependencies.appSetupController,
+                                      onOpenDevice: (device) =>
+                                          _openSetupDevicePage(
+                                        ctx,
+                                        device,
                                         dependencies.bleGatewayController,
+                                        dependencies.appSetupController,
+                                      ),
+                                      onFinishSetup: () =>
+                                          Navigator.of(ctx).pop(),
+                                    ),
                                   ),
-                                ),
-                              );
+                                );
+                              } else {
+                                _openBleSetupFlow(context, dependencies);
+                              }
                             },
-                            child: const Text('Open BLE monitor'),
-                          ),
-                          OutlinedButton(
-                            onPressed: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute<void>(
-                                  builder: (_) => N2kDevicesPage(
-                                    controller:
-                                        dependencies.bleGatewayController,
-                                  ),
-                                ),
-                              );
-                            },
-                            child: const Text('View raw N2K devices'),
+                            child: const Text('Add devices'),
                           ),
                         ],
                       ),
@@ -272,20 +269,25 @@ class AppHomePage extends StatelessWidget {
                                 itemCount: devices.length,
                                 itemBuilder: (context, index) {
                                   final device = devices[index];
-                                  return Card(
-                                    child: ListTile(
-                                      title: Text(device.displayName),
-                                      subtitle: Text(
-                                        'Source ${device.sourceAddress} • ${device.displayCategory}',
-                                      ),
-                                      trailing: Text(
-                                        device.isWindDevice
-                                            ? 'Wind page'
-                                            : device.isNavigationDevice
-                                                ? 'Navigation page'
-                                                : 'Details',
-                                      ),
+                                  return _HomeDeviceCard(
+                                      device: device,
                                       onTap: () {
+                                        // Temperature must be checked before
+                                        // wind — some sensors broadcast wind
+                                        // PGNs even if they are temp devices.
+                                        if (device.isTemperatureDevice) {
+                                          Navigator.of(context).push(
+                                            MaterialPageRoute<void>(
+                                              builder: (_) => TemperatureDataPage(
+                                                device: device,
+                                                telemetryController: dependencies
+                                                    .telemetryController,
+                                              ),
+                                            ),
+                                          );
+                                          return;
+                                        }
+
                                         if (device.isWindDevice) {
                                           Navigator.of(context).push(
                                             MaterialPageRoute<void>(
@@ -328,8 +330,7 @@ class AppHomePage extends StatelessWidget {
                                           ),
                                         );
                                       },
-                                    ),
-                                  );
+                                    );
                                 },
                               ),
                       ),
@@ -342,6 +343,96 @@ class AppHomePage extends StatelessWidget {
         );
       },
     );
+  }
+}
+
+// ── Home page device card ────────────────────────────────────────────────────
+
+class _HomeDeviceCard extends StatelessWidget {
+  const _HomeDeviceCard({required this.device, required this.onTap});
+
+  final N2kDeviceInfo device;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    final icon = _iconFor(device);
+    final color = _colorFor(device, cs);
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      elevation: 1,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              // Icon bubble
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: color, size: 22),
+              ),
+              const SizedBox(width: 14),
+              // Name + subtitle
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      device.displayName,
+                      style: tt.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'src ${device.sourceAddress} · ${device.displayCategory}',
+                      style: tt.bodySmall?.copyWith(
+                        color: cs.onSurface.withOpacity(0.6),
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              // Chevron
+              Icon(Icons.chevron_right, size: 18,
+                  color: cs.onSurface.withOpacity(0.3)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static IconData _iconFor(N2kDeviceInfo d) {
+    if (d.isBleGatewayDevice) return Icons.bluetooth;
+    if (d.isTemperatureDevice) return Icons.thermostat;
+    if (d.isWindDevice) return Icons.air;
+    if (d.isNavigationDevice) return Icons.satellite_alt;
+    return Icons.sensors;
+  }
+
+  static Color _colorFor(N2kDeviceInfo d, ColorScheme cs) {
+    if (d.isBleGatewayDevice) return cs.primary;
+    if (d.isTemperatureDevice) return Colors.orange.shade700;
+    if (d.isWindDevice) return Colors.blue.shade600;
+    if (d.isNavigationDevice) return Colors.green.shade700;
+    return cs.secondary;
   }
 }
 

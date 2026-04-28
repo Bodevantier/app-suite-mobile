@@ -12,8 +12,9 @@ void main() {
 
     expect(controller.latestSource, 'test');
     expect(controller.latestUtf8, startsWith('wind:spd=5.20'));
-    expect(controller.telemetry.windSpeed, 5.2);
-    expect(controller.telemetry.windAngleDeg, 45.0);
+    // ref=3 → not Apparent → trueWind*
+    expect(controller.telemetry.trueWindSpeedMs, 5.2);
+    expect(controller.telemetry.trueWindAngleDeg, 45.0);
     expect(controller.telemetry.windQuality, 3);
     expect(controller.telemetry.headingDeg, 123.4);
     expect(controller.telemetry.gps, '54.12345,10.54321');
@@ -29,8 +30,9 @@ void main() {
     );
 
     expect(controller.latestSource, 'notify');
-    expect(controller.telemetry.windSpeed, 3.1);
-    expect(controller.telemetry.windAngleDeg, 182.5);
+    // ref=2 → Apparent → apparentWind*
+    expect(controller.telemetry.apparentWindSpeedMs, 3.1);
+    expect(controller.telemetry.apparentWindAngleDeg, 182.5);
     expect(controller.telemetry.windQuality, 2);
     expect(controller.telemetry.headingDeg, 90.0);
   });
@@ -50,8 +52,9 @@ void main() {
       0x80, 0x96, 0x98, 0x00, 0x00, 0x2d, 0x31, 0x01,
     ]);
 
-    expect(controller.telemetry.windSpeed, 8.0);
-    expect(controller.telemetry.windAngleDeg, isNotNull);
+    // binary wind frame: data[5]=0x00 → ref=0 → trueWind*
+    expect(controller.telemetry.trueWindSpeedMs, 8.0);
+    expect(controller.telemetry.trueWindAngleDeg, isNotNull);
     expect(controller.telemetry.gps, '1.00000,2.00000');
   });
 }

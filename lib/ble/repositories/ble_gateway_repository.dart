@@ -197,12 +197,11 @@ class BleGatewayRepository extends ChangeNotifier {
       '[${_ts()}] [REPO] _applySnapshot: id=$_currentRequestId complete=${snapshot.snapshotComplete} deviceCount=${dedupedDevices.length} expected=${snapshot.snapshotExpected}',
     );
 
-    // Only commit when the gateway confirms the snapshot is complete.
-    // For the common case (complete=0) the data accumulates in _buildingSnapshot
-    // and is committed by the terminal event handlers below (timeout / complete).
-    // This way the UI shows a spinner until the full cycle is done and then
-    // reveals all devices at once.
-    if (snapshot.snapshotComplete) {
+    // Commit whenever we have at least one device – whether or not the
+    // snapshot is marked complete.  The STM32 may deliver a partial snapshot
+    // (complete=0) when the SPI queue was previously undersized; we still want
+    // to show whatever devices we have rather than showing stale cached data.
+    if (dedupedDevices.isNotEmpty) {
       _devices = dedupedDevices;
       _lastSnapshotAt = DateTime.now().toUtc();
       _buildingSnapshot = _latestSnapshot;

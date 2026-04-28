@@ -1,24 +1,23 @@
 import '../models/telemetry_data.dart';
-import 'package:flutter/foundation.dart';
 
 class TelemetryParser {
   TelemetryData parse(String input, {TelemetryData? previous}) {
     final prior = previous ?? TelemetryData.empty();
     final normalized = input.trim();
-    final windMatch = _windPayloadPattern.firstMatch(normalized);
-    final windSpeed = _parseWindSpeed(normalized, fallback: prior.windSpeed);
-    final windAngleDeg = _parseWindAngle(normalized, fallback: prior.windAngleDeg);
-    final windQuality = _parseWindQuality(normalized, fallback: prior.windQuality);
+    final windSpeed = _parseWindSpeed(normalized);
+    final windAngleDeg = _parseWindAngle(normalized);
+    final windRef = _parseWindQuality(normalized); // ref byte: 2 = Apparent
 
-    debugPrint('[TelemetryParser] input string="$normalized"');
-    debugPrint('[TelemetryParser] wind regex matched=${windMatch != null}');
-    debugPrint('[TelemetryParser] parsed wind speed=$windSpeed');
-    debugPrint('[TelemetryParser] parsed wind angle=$windAngleDeg');
+    // ref == 2 means Apparent Wind (masthead sensor); anything else is True Wind.
+    // When ref is absent, default to Apparent (sensor is the typical text source).
+    final isApparent = windRef == null || windRef == 2;
 
     return TelemetryData(
-      windSpeed: windSpeed,
-      windAngleDeg: windAngleDeg,
-      windQuality: windQuality,
+      trueWindSpeedMs: isApparent ? prior.trueWindSpeedMs : (windSpeed ?? prior.trueWindSpeedMs),
+      trueWindAngleDeg: isApparent ? prior.trueWindAngleDeg : (windAngleDeg ?? prior.trueWindAngleDeg),
+      apparentWindSpeedMs: isApparent ? (windSpeed ?? prior.apparentWindSpeedMs) : prior.apparentWindSpeedMs,
+      apparentWindAngleDeg: isApparent ? (windAngleDeg ?? prior.apparentWindAngleDeg) : prior.apparentWindAngleDeg,
+      windQuality: windRef ?? prior.windQuality,
       headingDeg: _parseDoubleMatch(
         normalized,
         RegExp(r'hdg:([-+]?\d+(?:[.,]\d+)?)deg'),

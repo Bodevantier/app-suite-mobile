@@ -13,6 +13,7 @@ class N2kDeviceInfo {
     this.hasTxPgnList = false,
     this.hasRxPgnList = false,
     this.hasLiveWindData = false,
+    this.hasLiveTemperatureData = false,
     this.serialNumber,
     this.softwareVersion,
     this.modelVersion,
@@ -39,6 +40,7 @@ class N2kDeviceInfo {
   final bool hasTxPgnList;
   final bool hasRxPgnList;
   final bool hasLiveWindData;
+  final bool hasLiveTemperatureData;
   final String? serialNumber;
   final String? softwareVersion;
   final String? modelVersion;
@@ -57,6 +59,15 @@ class N2kDeviceInfo {
   String? get hardwareVersion => modelVersion;
 
   bool get isWindDevice => hasLiveWindData || category == 'wind';
+
+  // Generic detection: any device advertising temperature PGNs is a temperature
+  // source. Function code 160 in the environmental class also matches.
+  static const _temperaturePgns = {130316, 130312};
+  bool get isTemperatureDevice {
+    if (hasLiveTemperatureData) return true;
+    if (supportedPgns.any(_temperaturePgns.contains)) return true;
+    return category == 'temperature';
+  }
 
   // Generic detection: any device advertising position or COG/SOG PGNs is a
   // navigation source, regardless of device class (chartplotter, GPS, AIS, etc.)
@@ -85,13 +96,16 @@ class N2kDeviceInfo {
       return modelName;
     }
 
-    return _displayText(name, 'Unknown device');
+    return 'Unknown device';
   }
 
   String get identityRootCauseHint {
     if (!hasGatewayFallbackName) {
       if (hasLiveWindData) {
         return 'This node is currently the live wind-data source reported by the gateway.';
+      }
+      if (hasLiveTemperatureData) {
+        return 'This node is currently broadcasting live temperature data.';
       }
       return 'Device name provided by gateway/device metadata.';
     }
@@ -209,6 +223,7 @@ class N2kDeviceInfo {
     bool? hasTxPgnList,
     bool? hasRxPgnList,
     bool? hasLiveWindData,
+    bool? hasLiveTemperatureData,
     String? serialNumber,
     String? softwareVersion,
     String? modelVersion,
@@ -235,6 +250,7 @@ class N2kDeviceInfo {
       hasTxPgnList: hasTxPgnList ?? this.hasTxPgnList,
       hasRxPgnList: hasRxPgnList ?? this.hasRxPgnList,
       hasLiveWindData: hasLiveWindData ?? this.hasLiveWindData,
+      hasLiveTemperatureData: hasLiveTemperatureData ?? this.hasLiveTemperatureData,
       serialNumber: serialNumber ?? this.serialNumber,
       softwareVersion: softwareVersion ?? this.softwareVersion,
       modelVersion: modelVersion ?? this.modelVersion,
@@ -397,14 +413,7 @@ class N2kDeviceInfo {
 }
 
 List<N2kDeviceInfo> filterSetupVisibleDevices(Iterable<N2kDeviceInfo> devices) {
-  final allDevices = devices.toList(growable: false);
-  final nonGatewayDevices = allDevices
-      .where((device) => !device.isBleGatewayDevice)
-      .toList(growable: false);
-
-  if (nonGatewayDevices.isNotEmpty) {
-    return List<N2kDeviceInfo>.unmodifiable(nonGatewayDevices);
-  }
-
-  return List<N2kDeviceInfo>.unmodifiable(allDevices);
+  return List<N2kDeviceInfo>.unmodifiable(
+    devices.where((device) => !device.isBleGatewayDevice),
+  );
 }

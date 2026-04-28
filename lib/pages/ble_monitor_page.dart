@@ -22,10 +22,14 @@ class BleMonitorPage extends StatefulWidget {
 
 class _BleMonitorPageState extends State<BleMonitorPage> {
   bool _didForwardAfterConnect = false;
+  bool _wasConnectedOnEntry = false;
 
   @override
   void initState() {
     super.initState();
+    // Record whether we were already connected when this page was pushed.
+    // onConnectionReady should only fire for connections made AFTER opening.
+    _wasConnectedOnEntry = widget.controller.connectedDevice != null;
     unawaited(_initializeBle());
   }
 
@@ -44,6 +48,7 @@ class _BleMonitorPageState extends State<BleMonitorPage> {
       animation: widget.controller,
       builder: (context, _) {
         if (!_didForwardAfterConnect &&
+            !_wasConnectedOnEntry &&
             widget.controller.connectedDevice != null &&
             widget.onConnectionReady != null) {
           _didForwardAfterConnect = true;
@@ -55,7 +60,8 @@ class _BleMonitorPageState extends State<BleMonitorPage> {
           });
         }
 
-        final connectedAddress = widget.controller.connectedDevice?.deviceId;
+        final connectedAddress =
+            widget.controller.connectedDevice?.remoteId.str;
         final discoveredDevices = widget.controller.discoveredDevices;
 
         return Scaffold(
@@ -119,15 +125,19 @@ class _BleMonitorPageState extends State<BleMonitorPage> {
                       ),
                     )
                   else
-                    ...discoveredDevices.map((device) {
-                      final isConnected = connectedAddress == device.deviceId;
+                    ...discoveredDevices.map((result) {
+                      final isConnected =
+                          connectedAddress == result.device.remoteId.str;
                       return Card(
                         child: ListTile(
                           title: Text(
-                            _deviceTitle(device.name, device.deviceId),
+                            _deviceTitle(
+                              result.device.platformName,
+                              result.device.remoteId.str,
+                            ),
                           ),
                           subtitle: Text(
-                            '${device.deviceId} | RSSI ${device.rssi}',
+                            '${result.device.remoteId.str} | RSSI ${result.rssi}',
                           ),
                           trailing: isConnected
                               ? const Text('Connected')
@@ -135,7 +145,7 @@ class _BleMonitorPageState extends State<BleMonitorPage> {
                                   onPressed: widget.controller.isConnecting
                                       ? null
                                       : () => unawaited(
-                                          widget.controller.connect(device),
+                                          widget.controller.connect(result),
                                         ),
                                   child: const Text('Connect'),
                                 ),

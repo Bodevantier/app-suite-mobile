@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:universal_ble/universal_ble.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 import 'ble_gateway_transport.dart';
 
@@ -61,10 +61,17 @@ class AutoConnectService extends ChangeNotifier {
     try {
       await transport.ensureInitialized();
 
-      // Check BLE availability first.
-      final availability = await UniversalBle.getBluetoothAvailabilityState();
-      if (availability != AvailabilityState.poweredOn) {
-        _status = 'Bluetooth ${availability.name} — waiting...';
+      // Check BLE availability first. Wait briefly if still initialising.
+      if (FlutterBluePlus.adapterStateNow != BluetoothAdapterState.on) {
+        try {
+          await FlutterBluePlus.adapterState
+              .firstWhere((s) => s == BluetoothAdapterState.on)
+              .timeout(const Duration(seconds: 5));
+        } catch (_) {}
+      }
+      final adapterState = FlutterBluePlus.adapterStateNow;
+      if (adapterState != BluetoothAdapterState.on) {
+        _status = 'Bluetooth ${adapterState.name} — waiting...';
         notifyListeners();
         _attemptInProgress = false;
         return;
@@ -80,9 +87,18 @@ class AutoConnectService extends ChangeNotifier {
         return;
       }
 
+      // Re-check: user may have manually connected during the scan delay.
+      if (transport.isConnected) {
+        _status = 'Connected';
+        _attemptInProgress = false;
+        notifyListeners();
+        return;
+      }
+
       // Look for the known device in what was discovered.
       final discovered = transport.devices;
-      final target = discovered.where((d) => d.deviceId == deviceId).firstOrNull;
+      final target =
+          discovered.where((d) => d.device.remoteId.str == deviceId).firstOrNull;
 
       if (target == null) {
         _status = 'Gateway not found nearby';

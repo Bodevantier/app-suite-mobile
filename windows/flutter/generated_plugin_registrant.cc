@@ -6,9 +6,9 @@
 
 #include "generated_plugin_registrant.h"
 
-#include <universal_ble/universal_ble_plugin_c_api.h>
+#include <flutter_blue_plus_winrt/flutter_blue_plus_plugin.h>
 
 void RegisterPlugins(flutter::PluginRegistry* registry) {
-  UniversalBlePluginCApiRegisterWithRegistrar(
-      registry->GetRegistrarForPlugin("UniversalBlePluginCApi"));
+  FlutterBluePlusPluginRegisterWithRegistrar(
+      registry->GetRegistrarForPlugin("FlutterBluePlusPlugin"));
 }

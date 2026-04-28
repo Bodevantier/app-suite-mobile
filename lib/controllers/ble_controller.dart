@@ -36,6 +36,8 @@ class BleController extends ChangeNotifier {
   String get latestSource => _latestSource;
   bool get isConnected => _isConnected;
   bool get isScanning => _isScanning;
+  bool get n2kScanComplete => _deviceTracker.scanComplete;
+  bool get n2kScanInProgress => _deviceTracker.scanInProgress;
   List<N2kDeviceInfo> get decodedDevices => _deviceTracker.devices;
 
   void onBinaryPacket(List<int> bytes, {String source = 'binary'}) {
@@ -43,38 +45,22 @@ class BleController extends ChangeNotifier {
     if (packet == null) {
       return;
     }
-
     _latestUtf8 = 'binary:${packet.frames.length}';
     _latestSource = source;
-    _deviceTracker.consumeFrames(packet.frames);
+    final scanCompletedNow = _deviceTracker.consumeFrames(packet.frames);
     _telemetry = _telemetryDecoder.decode(packet.frames, previous: _telemetry);
+    if (scanCompletedNow) {
+      notifyListeners(); // extra notify so scan-complete UI updates immediately
+    }
     notifyListeners();
   }
 
   void onLine(String text, {String source = 'notification'}) {
     final decoded = text.trim();
-    debugPrint(
-      '[BleController] source=$source decoded line="$decoded"',
-    );
 
     _latestUtf8 = decoded;
     _latestSource = source;
     _telemetry = _parser.parse(decoded, previous: _telemetry);
-
-    debugPrint('[BleController] parsed windSpeed=${_telemetry.windSpeed}');
-    debugPrint('[BleController] parsed windAngleDeg=${_telemetry.windAngleDeg}');
-
-    debugPrint(
-      '[BleController] final parsed telemetry '
-      'wind=${_telemetry.windSpeed} '
-      'angle=${_telemetry.windAngleDeg} '
-      'quality=${_telemetry.windQuality} '
-      'heading=${_telemetry.headingDeg} '
-      'gps=${_telemetry.gps} '
-      'model=${_telemetry.model} '
-      'battery=${_telemetry.batteryV} '
-      'device=${_telemetry.deviceId}',
-    );
 
     notifyListeners();
   }
@@ -97,6 +83,11 @@ class BleController extends ChangeNotifier {
       return;
     }
     _isScanning = value;
+    notifyListeners();
+  }
+
+  void startDeviceScan() {
+    _deviceTracker.startScan();
     notifyListeners();
   }
 

@@ -4,6 +4,10 @@ import 'models/n2k_frame.dart';
 class N2kFastPacketReassembler {
   final Map<String, _FastPacketSession> _sessions = <String, _FastPacketSession>{};
 
+  void reset() {
+    _sessions.clear();
+  }
+
   N2kFastPacketMessage? consume(N2kFrame frame) {
     if (frame.dlc < 2) {
       return null;

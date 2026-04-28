@@ -68,7 +68,7 @@ class WindAveragesService extends ChangeNotifier {
 
   /// Feed a new measurement.  Call this every time the telemetry updates.
   void addSample({
-    required double twsMs,
+    double? twsMs,
     double? awsMs,
     double? twaDeg,
     double? sogMs,
@@ -86,7 +86,9 @@ class WindAveragesService extends ChangeNotifier {
 
     final cutoff = now.subtract(_maxAge);
 
-    _addAndTrim(_tws, twsMs, now, cutoff);
+    if (twsMs != null) {
+      _addAndTrim(_tws, twsMs, now, cutoff);
+    }
     if (awsMs != null) {
       _addAndTrim(_aws, awsMs, now, cutoff);
     }

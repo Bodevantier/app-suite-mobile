@@ -1,12 +1,34 @@
 import 'package:ble_application/ble/services/ble_gateway_transport.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:universal_ble/universal_ble.dart';
+
+ScanResult _makeScanResult({
+  String id = 'aa:bb:cc:dd:ee:ff',
+  String name = '',
+  List<Guid> serviceUuids = const [],
+  int rssi = -60,
+}) {
+  return ScanResult(
+    device: BluetoothDevice.fromId(id),
+    advertisementData: AdvertisementData(
+      advName: name,
+      txPowerLevel: null,
+      appearance: null,
+      connectable: true,
+      manufacturerData: {},
+      serviceData: {},
+      serviceUuids: serviceUuids,
+    ),
+    rssi: rssi,
+    timeStamp: DateTime.now(),
+  );
+}
 
 void main() {
   test('recognizes transient Android BLE 133 failures', () {
     expect(
       isTransientBleConnectError(
-        'UniversalBleException: Code: UniversalBleErrorCode.unknownError, Message: Unknown Error 133',
+        'FlutterBluePlusException: startConnect, android_specific_error, 133, GATT_ERROR',
       ),
       isTrue,
     );
@@ -22,15 +44,15 @@ void main() {
   });
 
   test('recognizes gateway candidates by advertised service uuid', () {
-    final device = BleDevice(
-      deviceId: 'aa:bb:cc:dd:ee:ff',
+    final result = _makeScanResult(
+      id: 'aa:bb:cc:dd:ee:ff',
       name: 'Nearby device',
-      services: const <String>['9db8892d-6702-118c-bc44-81ea76f3fe10'],
+      serviceUuids: [Guid('9db8892d-6702-118c-bc44-81ea76f3fe10')],
     );
 
     expect(
       isBleGatewayCandidate(
-        device,
+        result,
         serviceUuid: '9db8892d-6702-118c-bc44-81ea76f3fe10',
       ),
       isTrue,
@@ -38,14 +60,14 @@ void main() {
   });
 
   test('recognizes gateway candidates by name fallback', () {
-    final device = BleDevice(
-      deviceId: '11:22:33:44:55:66',
+    final result = _makeScanResult(
+      id: '11:22:33:44:55:66',
       name: 'SDolve N2K BLE',
     );
 
     expect(
       isBleGatewayCandidate(
-        device,
+        result,
         serviceUuid: '9db8892d-6702-118c-bc44-81ea76f3fe10',
       ),
       isTrue,
@@ -53,15 +75,15 @@ void main() {
   });
 
   test('rejects unrelated peripherals', () {
-    final device = BleDevice(
-      deviceId: '22:33:44:55:66:77',
+    final result = _makeScanResult(
+      id: '22:33:44:55:66:77',
       name: 'Headphones',
-      services: const <String>['180f'],
+      serviceUuids: [Guid('180f')],
     );
 
     expect(
       isBleGatewayCandidate(
-        device,
+        result,
         serviceUuid: '9db8892d-6702-118c-bc44-81ea76f3fe10',
       ),
       isFalse,

@@ -55,11 +55,12 @@ class AppDependencies {
     var unsavedSamples = 0;
     telemetryController.addListener(() {
       final t = telemetryController.telemetry;
-      if (t.windSpeed == null || t.updatedAt == null) return;
+      if (t.updatedAt == null) return;
+      if (t.apparentWindSpeedMs == null) return;
       windAverages.addSample(
-        twsMs: t.windSpeed!,
+        twsMs: t.effectiveTrueWindSpeedMs,
         awsMs: t.apparentWindSpeedMs,
-        twaDeg: t.windAngleDeg,
+        twaDeg: t.effectiveTrueWindAngleDeg,
         sogMs: t.sogMs,
         timestamp: t.updatedAt,
       );

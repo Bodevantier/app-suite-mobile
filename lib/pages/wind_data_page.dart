@@ -70,8 +70,8 @@ class _WindDataPageState extends State<WindDataPage> {
           ]),
           builder: (context, _) {
             final telemetry = widget.telemetryController.telemetry;
-            final windSpeed = telemetry.windSpeed;
-            final windAngle = telemetry.windAngleDeg;
+            final windSpeed = telemetry.effectiveTrueWindSpeedMs;
+            final windAngle = telemetry.effectiveTrueWindAngleDeg;
             final apparentWindSpeed = telemetry.apparentWindSpeedMs;
             final apparentWindAngle = telemetry.apparentWindAngleDeg;
             final pageCount = 1 +
@@ -116,26 +116,28 @@ class _WindDataPageState extends State<WindDataPage> {
                       },
                       children: [
                         _WindModeView(
-                          title: 'True wind',
-                          speedLabel: 'TWS',
-                          speedValue: _formatWindSpeed(windSpeed),
-                          angleDeg: windAngle,
+                          title: 'Apparent wind',
+                          speedLabel: 'AWS',
+                          speedValue: _formatWindSpeed(apparentWindSpeed),
+                          angleDeg: apparentWindAngle,
                           sogMs: widget.hasNavigationDevice
                               ? telemetry.sogMs
                               : null,
                           onSpeedTap: _toggleWindSpeedUnit,
+                          missingDataMessage: _apparentWindMissingMessage(
+                            telemetry.apparentWindSpeedMs,
+                          ),
                         ),
                         if (widget.hasNavigationDevice)
                           _WindModeView(
-                            title: 'Apparent wind',
-                            speedLabel: 'AWS',
-                            speedValue: _formatWindSpeed(apparentWindSpeed),
-                            angleDeg: apparentWindAngle,
+                            title: 'True wind',
+                            speedLabel: 'TWS',
+                            speedValue: _formatWindSpeed(windSpeed),
+                            angleDeg: windAngle,
                             sogMs: telemetry.sogMs,
                             onSpeedTap: _toggleWindSpeedUnit,
-                            missingDataMessage: _apparentWindMissingMessage(
-                              telemetry.windSpeed,
-                              telemetry.sogMs,
+                            missingDataMessage: _trueWindMissingMessage(
+                              telemetry.effectiveTrueWindSpeedMs,
                             ),
                           ),
                         if (widget.windAverages != null)
@@ -172,12 +174,13 @@ class _WindDataPageState extends State<WindDataPage> {
     );
   }
 
-  String? _apparentWindMissingMessage(double? windSpeed, double? sogMs) {
-    if (windSpeed == null && sogMs == null) {
-      return 'Waiting for wind sensor and chartplotter (SOG)';
-    }
-    if (windSpeed == null) return 'Waiting for wind sensor';
-    if (sogMs == null) return 'Waiting for chartplotter (SOG)';
+  String? _apparentWindMissingMessage(double? apparentWindSpeed) {
+    if (apparentWindSpeed == null) return 'Waiting for wind sensor';
+    return null;
+  }
+
+  String? _trueWindMissingMessage(double? effectiveTws) {
+    if (effectiveTws == null) return 'Waiting for wind sensor and SOG';
     return null;
   }
 
@@ -309,7 +312,18 @@ class _WindBoatAngleView extends StatelessWidget {
   final double? sogMs;
   final VoidCallback? onSpeedTap;
 
-  Widget _pill(String label, String value, {VoidCallback? onTap}) {
+  Widget _valueText(String value) {
+    return Text(
+      value,
+      style: const TextStyle(
+        fontSize: 13,
+        fontWeight: FontWeight.w800,
+        color: Color(0xff1e293b),
+      ),
+    );
+  }
+
+  Widget _pill(String label, Widget value, {VoidCallback? onTap}) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -338,14 +352,7 @@ class _WindBoatAngleView extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 5),
-            Text(
-              value,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w800,
-                color: Color(0xff1e293b),
-              ),
-            ),
+            value,
           ],
         ),
       ),
@@ -361,20 +368,116 @@ class _WindBoatAngleView extends StatelessWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            _pill(speedLabel, speedValue, onTap: onSpeedTap),
+            _pill(speedLabel, _valueText(speedValue), onTap: onSpeedTap),
             const SizedBox(width: 8),
             _pill(
               angleLabel,
-              angleDeg == null ? '--' : '${angleDeg!.toStringAsFixed(1)}°',
+              _AnimatedAngleText(angleDeg: angleDeg),
             ),
           ],
         ),
         if (sogMs != null) ...[
           const SizedBox(height: 8),
-          _pill('SOG', '${(sogMs! * 1.94384).toStringAsFixed(1)} kn'),
+          _pill('SOG', _valueText('${(sogMs! * 1.94384).toStringAsFixed(1)} kn')),
         ],
         const SizedBox(height: 8),
       ],
+    );
+  }
+}
+
+class _AnimatedAngleText extends StatefulWidget {
+  const _AnimatedAngleText({required this.angleDeg});
+
+  final double? angleDeg;
+
+  @override
+  State<_AnimatedAngleText> createState() => _AnimatedAngleTextState();
+}
+
+class _AnimatedAngleTextState extends State<_AnimatedAngleText>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _animation;
+  double _displayAngle = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _displayAngle = widget.angleDeg ?? 0;
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 300),
+    );
+    _animation = AlwaysStoppedAnimation(_displayAngle);
+  }
+
+  @override
+  void didUpdateWidget(_AnimatedAngleText oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final newAngle = widget.angleDeg;
+    if (newAngle == null || newAngle == oldWidget.angleDeg) return;
+
+    // Use the current visual position so interrupted animations don't jump.
+    final current = _animation.value;
+    // Shortest-arc delta in O(1): bring into (-360,360) then clamp to [-180,180].
+    var delta = (newAngle - current) % 360;
+    if (delta > 180) delta -= 360;
+    if (delta < -180) delta += 360;
+    final target = current + delta;
+
+    _animation = Tween<double>(begin: current, end: target).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeOut),
+    );
+    _displayAngle = target;
+    _controller.forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.angleDeg == null) {
+      return const Text(
+        '--',
+        style: TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w800,
+          color: Color(0xff1e293b),
+        ),
+      );
+    }
+
+    return AnimatedBuilder(
+      animation: _animation,
+      builder: (context, _) {
+        var normalized = _animation.value % 360;
+        if (normalized < 0) normalized += 360;
+        // Convert NMEA 0–360° to sailing convention: 0–180° S / 0–180° P.
+        // 0° = dead ahead, 180° = dead astern (no suffix needed).
+        final String label;
+        if (normalized <= 0.05 || normalized >= 359.95) {
+          label = '0°';
+        } else if ((normalized - 180).abs() <= 0.05) {
+          label = '180°';
+        } else if (normalized < 180) {
+          label = '${normalized.toStringAsFixed(1)}° S';
+        } else {
+          label = '${(360.0 - normalized).toStringAsFixed(1)}° P';
+        }
+        return Text(
+          label,
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w800,
+            color: Color(0xff1e293b),
+          ),
+        );
+      },
     );
   }
 }
@@ -413,18 +516,16 @@ class _AnimatedWindGaugeState extends State<_AnimatedWindGauge>
     final newAngle = widget.angleDeg;
     if (newAngle == null || newAngle == old.angleDeg) return;
 
-    // Find the shortest arc so the arrow never spins the long way around.
-    var delta = newAngle - _displayAngle;
-    while (delta > 180) {
-      delta -= 360;
-    }
-    while (delta < -180) {
-      delta += 360;
-    }
-    final target = _displayAngle + delta;
+    // Use the current visual position so interrupted animations don't jump.
+    final current = _animation.value;
+    // Shortest-arc delta in O(1): bring into (-360,360) then clamp to [-180,180].
+    var delta = (newAngle - current) % 360;
+    if (delta > 180) delta -= 360;
+    if (delta < -180) delta += 360;
+    final target = current + delta;
 
     _animation = Tween<double>(
-      begin: _displayAngle,
+      begin: current,
       end: target,
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
     _displayAngle = target;
@@ -471,6 +572,7 @@ class _WindGaugePainter extends CustomPainter {
     final outerRadius = size.shortestSide * 0.44;
 
     _drawTicks(canvas, center, outerRadius);
+    _drawPSLabels(canvas, center, outerRadius);
     _drawWindArrow(canvas, center, outerRadius * 0.82, angleDeg);
     _drawBoat(canvas, center, size.shortestSide * 0.30);
   }
@@ -498,6 +600,27 @@ class _WindGaugePainter extends CustomPainter {
     }
   }
 
+  void _drawPSLabels(Canvas canvas, Offset center, double radius) {
+    void drawLabel(String text, double dx, double dy) {
+      final span = TextSpan(
+        text: text,
+        style: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+          color: Color(0xff94a3b8),
+        ),
+      );
+      final tp = TextPainter(text: span, textDirection: TextDirection.ltr)
+        ..layout();
+      tp.paint(canvas, Offset(dx - tp.width / 2, dy - tp.height / 2));
+    }
+    // 'S' at starboard (right, 90°), 'P' at port (left, 270°)
+    // Placed inside the gauge at 78 % of outer radius so they never clip.
+    final r = radius * 0.78;
+    drawLabel('S', center.dx + r, center.dy);
+    drawLabel('P', center.dx - r, center.dy);
+  }
+
   void _drawBoat(Canvas canvas, Offset center, double size) {
     final path = Path()
       ..moveTo(center.dx, center.dy - size)
@@ -519,19 +642,47 @@ class _WindGaugePainter extends CustomPainter {
       return;
     }
 
+    const arrowColor = Color(0xff0ea5e9);
     final angle = angleDeg * math.pi / 180 - math.pi / 2;
     final tip = Offset(
       center.dx + radius * math.cos(angle),
       center.dy + radius * math.sin(angle),
     );
 
+    // Shaft
     canvas.drawLine(
       center,
       tip,
       Paint()
-        ..color = const Color(0xff0ea5e9)
-        ..strokeWidth = 4
-        ..strokeCap = StrokeCap.round,
+        ..color = arrowColor
+        ..strokeWidth = 3
+        ..strokeCap = StrokeCap.butt,
+    );
+
+    // Filled arrowhead triangle at the tip
+    const headLen = 14.0;
+    const headHalf = 6.0;
+    final base = Offset(
+      tip.dx - headLen * math.cos(angle),
+      tip.dy - headLen * math.sin(angle),
+    );
+    final left = Offset(
+      base.dx + headHalf * math.sin(angle),
+      base.dy - headHalf * math.cos(angle),
+    );
+    final right = Offset(
+      base.dx - headHalf * math.sin(angle),
+      base.dy + headHalf * math.cos(angle),
+    );
+    canvas.drawPath(
+      Path()
+        ..moveTo(tip.dx, tip.dy)
+        ..lineTo(left.dx, left.dy)
+        ..lineTo(right.dx, right.dy)
+        ..close(),
+      Paint()
+        ..color = arrowColor
+        ..style = PaintingStyle.fill,
     );
   }
 
