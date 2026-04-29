@@ -231,7 +231,7 @@ class _N2kDeviceCard extends StatelessWidget {
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
-                  color: iconColor.withOpacity(0.15),
+                  color: iconColor.withValues(alpha: 0.15),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(icon, color: iconColor, size: 22),
@@ -255,7 +255,7 @@ class _N2kDeviceCard extends StatelessWidget {
                       Text(
                         subtitleParts.join(' · '),
                         style: tt.bodySmall?.copyWith(
-                          color: cs.onSurface.withOpacity(0.65),
+                          color: cs.onSurface.withValues(alpha: 0.65),
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -327,7 +327,7 @@ class _N2kDeviceCard extends StatelessWidget {
                   Text(
                     'src ${device.sourceAddress}',
                     style: tt.labelSmall?.copyWith(
-                      color: cs.onSurface.withOpacity(0.45),
+                      color: cs.onSurface.withValues(alpha: 0.45),
                     ),
                   ),
                 ],
@@ -336,7 +336,7 @@ class _N2kDeviceCard extends StatelessWidget {
               Icon(
                 Icons.chevron_right,
                 size: 18,
-                color: cs.onSurface.withOpacity(0.3),
+                color: cs.onSurface.withValues(alpha: 0.3),
               ),
             ],
           ),
@@ -393,7 +393,7 @@ class _SmallChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
+        color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(

@@ -5,7 +5,12 @@
 // means different things in different classes (e.g. 130 = Wind in class 85,
 // but also = VHF Radio in class 60). The lookup therefore requires both.
 //
-// Reference: NMEA 2000 Appendix B.
+// NOTE: For Class 85 (External Environment) the NMEA 2000 standard only
+// formally defines Function 130 (Atmospheric) and 140 (Aquatic). The other
+// codes below (150/155/160/170/180) are a project-internal convention used
+// by our sensors. Categorization based on transmitted PGN evidence (handled
+// by N2kDeviceTracker._markLive*) is authoritative; this lookup is only a
+// fallback when no live PGN frames have been seen yet.
 
 abstract final class N2kDeviceClass {
   static const int safety            = 20;

@@ -4,7 +4,7 @@ import 'models/n2k_frame_batch.dart';
 class N2kBinaryPacketParser {
   static const int packetVersion = 1;
   static const int packetTypeFrameBatch = 1;
-  static const int headerLength = 8;
+  static const int headerLength = 6;
   static const int frameLength = 14;
 
   N2kFrameBatch? parse(List<int> bytes) {

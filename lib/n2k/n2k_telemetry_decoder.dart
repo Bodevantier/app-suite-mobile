@@ -10,6 +10,7 @@ class N2kTelemetryDecoder {
   static const int pgnCOGSOGRapid = 129026;
   static const int pgnBattery = 127508;
   static const int pgnTemperatureExt = 130316;
+  static const int pgnTemperature = 130312;
 
   TelemetryData decode(Iterable<N2kFrame> frames, {TelemetryData? previous}) {
     var telemetry = previous ?? TelemetryData.empty();
@@ -19,15 +20,34 @@ class N2kTelemetryDecoder {
       switch (frame.pgn) {
         case pgnWind:
           if (frame.dlc >= 6) {
-            final ref = data[5] & 0x07; // bits 0–2: 2 = Apparent, 0/1 = True
+            // PGN 130306 byte 5 bits 0-2 = Wind Reference:
+            //   0 = True (ground/north referenced, geographic angle)
+            //   1 = Magnetic (geographic-style, magnetic referenced)
+            //   2 = Apparent (boat-referenced, angle from bow)
+            //   3 = True (boat-referenced — angle from bow, like apparent)
+            //   4 = True (water-referenced — also boat-frame, angle from bow)
+            // Codes 2/3/4 are already in the boat frame; codes 0/1 are
+            // geographic and must be rotated by heading to get a TWA.
+            final ref = data[5] & 0x07;
             final speedMs = _readUint16Le(data, 1) * 0.01;
             final rawDeg = _radToDeg(_readUint16Le(data, 3) * 0.0001);
             // Use NMEA 2000 angle as-is and normalize to [0, 360).
             final angleDeg = rawDeg % 360.0;
+            final isBoatReferenced = (ref == 2) || (ref == 3) || (ref == 4);
             if (ref == 2) {
               telemetry = telemetry.copyWith(
                 apparentWindSpeedMs: speedMs,
                 apparentWindAngleDeg: angleDeg,
+                windQuality: data[5],
+                rawText: 'binary:wind',
+                updatedAt: DateTime.now(),
+              );
+            } else if (isBoatReferenced) {
+              // ref = 3 or 4 — true wind, but already in boat frame (angle
+              // from bow). No heading rotation needed.
+              telemetry = telemetry.copyWith(
+                trueWindSpeedMs: speedMs,
+                trueWindAngleDeg: angleDeg,
                 windQuality: data[5],
                 rawText: 'binary:wind',
                 updatedAt: DateTime.now(),
@@ -60,7 +80,26 @@ class N2kTelemetryDecoder {
           }
           break;
         case pgnHeading:
-          if (frame.dlc >= 3) {
+          // PGN 127250: byte 0 = SID, bytes 1-2 = heading (uint16 LE, 0.0001 rad),
+          //             bytes 3-4 = deviation, bytes 5-6 = variation,
+          //             byte 7 bits 0-1 = reference (0 = True, 1 = Magnetic,
+          //             2 = Error, 3 = Null/unavailable).
+          // Wind decoding below treats stored headingDeg as TRUE/geographic
+          // when rotating geographic wind into boat frame. Storing magnetic
+          // heading here would silently mis-rotate true wind, so we accept
+          // only ref == 0 (True). A future improvement: combine magnetic
+          // heading with PGN 127258 variation to derive true heading.
+          if (frame.dlc >= 8) {
+            final ref = data[7] & 0x03;
+            if (ref == 0) {
+              telemetry = telemetry.copyWith(
+                headingDeg: _radToDeg(_readUint16Le(data, 1) * 0.0001),
+                rawText: 'binary:heading',
+                updatedAt: DateTime.now(),
+              );
+            }
+          } else if (frame.dlc >= 3) {
+            // Legacy/short frame: assume true heading (best-effort fallback).
             telemetry = telemetry.copyWith(
               headingDeg: _radToDeg(_readUint16Le(data, 1) * 0.0001),
               rawText: 'binary:heading',
@@ -107,9 +146,26 @@ class N2kTelemetryDecoder {
           break;
         case pgnTemperatureExt:
           // PGN 130316: byte 0 = SID, byte 1 = instance, byte 2 = source,
-          //             bytes 3-5 = actual temperature (uint24 LE, 0.001 K resolution)
-          if (frame.dlc >= 6) {
+          //             bytes 3-5 = actual temperature (uint24 LE, 0.001 K),
+          //             bytes 6-7 = set temperature (uint16 LE, 0.1 K, optional).
+          // PGN 130316 is an 8-byte single-frame PGN; require full payload to
+          // avoid acting on truncated frames.
+          if (frame.dlc >= 8) {
             final tempK = _readUint24Le(data, 3) * 0.001;
+            telemetry = telemetry.copyWith(
+              temperatureC: tempK - 273.15,
+              rawText: 'binary:temperature',
+              updatedAt: DateTime.now(),
+            );
+          }
+          break;
+        case pgnTemperature:
+          // PGN 130312: byte 0 = SID, byte 1 = instance, byte 2 = source,
+          //             bytes 3-4 = actual temperature (uint16 LE, 0.01 K),
+          //             bytes 5-6 = set temperature (uint16 LE, 0.01 K, optional).
+          // 8-byte single-frame PGN; require full payload.
+          if (frame.dlc >= 8) {
+            final tempK = _readUint16Le(data, 3) * 0.01;
             telemetry = telemetry.copyWith(
               temperatureC: tempK - 273.15,
               rawText: 'binary:temperature',

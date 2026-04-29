@@ -204,9 +204,6 @@ class BleGatewayController extends ChangeNotifier {
     final lines = _framer.addChunk(chunk.bytes);
     for (final line in lines) {
       repository.handleIncomingLine(line, source: chunk.source);
-      if (line.startsWith('wind:')) {
-        telemetryController?.onLine(line, source: chunk.source);
-      }
     }
   }
 

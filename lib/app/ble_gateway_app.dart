@@ -168,7 +168,16 @@ class AppHomePage extends StatelessWidget {
         dependencies.autoConnectService,
       ]),
       builder: (context, _) {
-        final devices = dependencies.appSetupController.addedDevices;
+        final addedDevices = dependencies.appSetupController.addedDevices;
+        // Overlay the live device snapshot from the gateway controller so the
+        // home page reflects up-to-date category / live-data flags (e.g. the
+        // thermostat icon) instead of the stale snapshot stored at "Add" time.
+        final liveBySrc = <int, N2kDeviceInfo>{
+          for (final d in dependencies.bleGatewayController.devices) d.src: d,
+        };
+        final devices = addedDevices
+            .map((d) => liveBySrc[d.src] ?? d)
+            .toList(growable: false);
         final isConnected = dependencies.bleGatewayController.isConnected;
         final isConnecting = dependencies.bleGatewayController.isConnecting ||
             dependencies.autoConnectService.isRunning &&
@@ -377,7 +386,7 @@ class _HomeDeviceCard extends StatelessWidget {
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
-                  color: color.withOpacity(0.15),
+                  color: color.withValues(alpha: 0.15),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(icon, color: color, size: 22),
@@ -400,7 +409,7 @@ class _HomeDeviceCard extends StatelessWidget {
                     Text(
                       'src ${device.sourceAddress} · ${device.displayCategory}',
                       style: tt.bodySmall?.copyWith(
-                        color: cs.onSurface.withOpacity(0.6),
+                        color: cs.onSurface.withValues(alpha: 0.6),
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -411,7 +420,7 @@ class _HomeDeviceCard extends StatelessWidget {
               const SizedBox(width: 10),
               // Chevron
               Icon(Icons.chevron_right, size: 18,
-                  color: cs.onSurface.withOpacity(0.3)),
+                  color: cs.onSurface.withValues(alpha: 0.3)),
             ],
           ),
         ),

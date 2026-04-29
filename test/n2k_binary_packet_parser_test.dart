@@ -5,7 +5,7 @@ void main() {
   test('parses a binary frame batch packet', () {
     final parser = N2kBinaryPacketParser();
     final bytes = <int>[
-      1, 1, 7, 0, 1, 0, 0, 0,
+      1, 1, 7, 0, 1, 0,
       0x23, 0x02, 0xfd, 0x09,
       8,
       0x05,

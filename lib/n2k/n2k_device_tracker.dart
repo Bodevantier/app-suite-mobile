@@ -13,6 +13,7 @@ class N2kDeviceTracker {
   static const int pgnConfigInfo = 126998;
   static const int pgnWind = 130306;
   static const int pgnTemperatureExt = 130316;
+  static const int pgnTemperature = 130312;
 
   /// Quiet-window: scan considered done when no device-identity frame
   /// arrives for this long after the last one (mirrors Test-16).
@@ -104,7 +105,7 @@ class N2kDeviceTracker {
       if (frame.pgn == pgnWind) {
         _markLiveWind(frame.sourceAddress);
       }
-      if (frame.pgn == pgnTemperatureExt) {
+      if (frame.pgn == pgnTemperatureExt || frame.pgn == pgnTemperature) {
         _markLiveTemperature(frame.sourceAddress);
       }
       if (frame.pgn == pgnPgnList) {
@@ -175,12 +176,20 @@ class N2kDeviceTracker {
 
   void _markLiveWind(int source) {
     final device = _ensureDevice(source);
-    _devices[source] = device.copyWith(hasLiveWindData: true);
+    // PGN evidence wins over the AddressClaim function code, which is not
+    // standardized in N2K Class 85 beyond Atmospheric (130) / Aquatic (140).
+    _devices[source] = device.copyWith(
+      hasLiveWindData: true,
+      category: 'wind',
+    );
   }
 
   void _markLiveTemperature(int source) {
     final device = _ensureDevice(source);
-    _devices[source] = device.copyWith(hasLiveTemperatureData: true);
+    _devices[source] = device.copyWith(
+      hasLiveTemperatureData: true,
+      category: 'temperature',
+    );
   }
 
   void _consumeAddressClaim(N2kFrame frame) {

@@ -7,20 +7,16 @@ import '../n2k/n2k_device_tracker.dart';
 import '../n2k/n2k_telemetry_decoder.dart';
 import '../models/n2k_device_info.dart';
 import '../models/telemetry_data.dart';
-import '../services/telemetry_parser.dart';
 
 class BleController extends ChangeNotifier {
   BleController({
-    TelemetryParser? parser,
     N2kBinaryPacketParser? binaryPacketParser,
      N2kDeviceTracker? deviceTracker,
     N2kTelemetryDecoder? telemetryDecoder,
-  }) : _parser = parser ?? TelemetryParser(),
-       _binaryPacketParser = binaryPacketParser ?? N2kBinaryPacketParser(),
+  }) : _binaryPacketParser = binaryPacketParser ?? N2kBinaryPacketParser(),
        _deviceTracker = deviceTracker ?? N2kDeviceTracker(),
        _telemetryDecoder = telemetryDecoder ?? N2kTelemetryDecoder();
 
-  final TelemetryParser _parser;
   final N2kBinaryPacketParser _binaryPacketParser;
   final N2kDeviceTracker _deviceTracker;
   final N2kTelemetryDecoder _telemetryDecoder;
@@ -60,7 +56,9 @@ class BleController extends ChangeNotifier {
 
     _latestUtf8 = decoded;
     _latestSource = source;
-    _telemetry = _parser.parse(decoded, previous: _telemetry);
+    // Text-format telemetry is no longer parsed: telemetry is decoded
+    // from binary N2K frame batches via onBinaryPacket().  Kept only so
+    // that residual text traffic over the gateway updates latestUtf8.
 
     notifyListeners();
   }

@@ -206,7 +206,7 @@ class _SetupDeviceCard extends StatelessWidget {
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
-                  color: color.withOpacity(0.15),
+                  color: color.withValues(alpha: 0.15),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(icon, color: color, size: 22),
@@ -229,7 +229,7 @@ class _SetupDeviceCard extends StatelessWidget {
                     Text(
                       'src ${device.sourceAddress} · $pageLabel',
                       style: tt.bodySmall?.copyWith(
-                        color: cs.onSurface.withOpacity(0.6),
+                        color: cs.onSurface.withValues(alpha: 0.6),
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,

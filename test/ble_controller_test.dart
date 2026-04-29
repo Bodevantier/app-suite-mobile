@@ -2,46 +2,22 @@ import 'package:ble_application/controllers/ble_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('parses telemetry from a complete decoded line', () {
+  test('latestUtf8 reflects the last text line received via onLine', () {
     final controller = BleController();
 
-    controller.onLine(
-      'wind:spd=5.20,ang=45.0,ref=3 hdg:123.4deg gps:54.12345,10.54321 bat:12.50V/1.20A/25.0C',
-      source: 'test',
-    );
+    controller.onLine('hello-world', source: 'test');
 
     expect(controller.latestSource, 'test');
-    expect(controller.latestUtf8, startsWith('wind:spd=5.20'));
-    // ref=3 → not Apparent → trueWind*
-    expect(controller.telemetry.trueWindSpeedMs, 5.2);
-    expect(controller.telemetry.trueWindAngleDeg, 45.0);
-    expect(controller.telemetry.windQuality, 3);
-    expect(controller.telemetry.headingDeg, 123.4);
-    expect(controller.telemetry.gps, '54.12345,10.54321');
-    expect(controller.telemetry.batteryV, 12.5);
-  });
-
-  test('parses telemetry from notification bytes', () {
-    final controller = BleController();
-
-    controller.onNotification(
-      'wind:spd=3.10,ang=182.5,ref=2 hdg:90.0deg gps:- bat:-'.codeUnits,
-      source: 'notify',
-    );
-
-    expect(controller.latestSource, 'notify');
-    // ref=2 → Apparent → apparentWind*
-    expect(controller.telemetry.apparentWindSpeedMs, 3.1);
-    expect(controller.telemetry.apparentWindAngleDeg, 182.5);
-    expect(controller.telemetry.windQuality, 2);
-    expect(controller.telemetry.headingDeg, 90.0);
+    expect(controller.latestUtf8, 'hello-world');
+    // Text-format telemetry is no longer parsed; telemetry stays empty.
+    expect(controller.telemetry.headingDeg, isNull);
   });
 
   test('parses telemetry from binary frame batches', () {
     final controller = BleController();
 
     controller.onBinaryPacket(<int>[
-      1, 1, 1, 0, 2, 0, 0, 0,
+      1, 1, 1, 0, 2, 0,
       0x23, 0x02, 0xfd, 0x09,
       8,
       0x05,
