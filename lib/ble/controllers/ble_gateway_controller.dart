@@ -34,6 +34,12 @@ class BleGatewayController extends ChangeNotifier {
 
   late final StreamSubscription<BleTransportChunk> _chunkSubscription;
   bool _lastConnected = false;
+  DateTime? _lastChunkAt;
+
+  /// Timestamp of the most recent BLE notification received from the gateway.
+  /// Used by the UI to render a smooth liveness indicator that decays when
+  /// the data stream stalls.
+  DateTime? get lastChunkAt => _lastChunkAt;
 
   List<ScanResult> get discoveredDevices => transport.devices;
   BluetoothDevice? get connectedDevice => transport.connectedDevice;
@@ -196,6 +202,7 @@ class BleGatewayController extends ChangeNotifier {
   }
 
   void _handleChunk(BleTransportChunk chunk) {
+    _lastChunkAt = DateTime.now();
     if (chunk.isBinary) {
       telemetryController?.onBinaryPacket(chunk.bytes, source: chunk.source);
       return;
@@ -214,6 +221,7 @@ class BleGatewayController extends ChangeNotifier {
         _framer.clear();
         repository.handleDisconnected();
         telemetryController?.reset();
+        _lastChunkAt = null;
       }
     }
     notifyListeners();
