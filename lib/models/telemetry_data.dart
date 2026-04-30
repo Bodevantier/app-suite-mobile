@@ -50,42 +50,56 @@ class TelemetryData {
     return const TelemetryData();
   }
 
-  /// True wind speed (m/s). Prefers direct physics computation from apparent
-  /// wind + SOG when available — this avoids relying on chartplotter-broadcast
-  /// true wind which may carry reference-convention mismatches.
-  /// Falls back to stored [trueWindSpeedMs] (e.g. chartplotter with no sensor).
-  double? get effectiveTrueWindSpeedMs {
-    if (apparentWindSpeedMs != null && apparentWindAngleDeg != null && sogMs != null) {
-      final awa = apparentWindAngleDeg! * math.pi / 180;
-      final twx = apparentWindSpeedMs! * math.sin(awa);
-      final twy = apparentWindSpeedMs! * math.cos(awa) - sogMs!;
-      final tws = math.sqrt(twx * twx + twy * twy);
-      // Below 0.5 m/s the vectors nearly cancel and the result is dominated by
-      // GPS noise — return apparent wind speed directly.
-      if (tws < 0.5) return apparentWindSpeedMs;
-      return tws;
-    }
-    return trueWindSpeedMs;
-  }
+  /// True wind speed (m/s). See [_computedTrueWind] for the derivation;
+  /// falls back to stored [trueWindSpeedMs] when AWS/AWA/SOG aren't all known.
+  double? get effectiveTrueWindSpeedMs => _computedTrueWind()?.$1 ?? trueWindSpeedMs;
 
-  /// True wind angle (degrees from bow, 0–360). Prefers direct computation
-  /// from apparent wind + SOG; falls back to stored [trueWindAngleDeg].
-  double? get effectiveTrueWindAngleDeg {
-    if (apparentWindSpeedMs != null && apparentWindAngleDeg != null && sogMs != null) {
-      final awa = apparentWindAngleDeg! * math.pi / 180;
-      final twx = apparentWindSpeedMs! * math.sin(awa);
-      final twy = apparentWindSpeedMs! * math.cos(awa) - sogMs!;
-      final tws = math.sqrt(twx * twx + twy * twy);
-      // When TWS is near zero the vectors nearly cancel and atan2(~0, ~0) is
-      // undefined — GPS noise in SOG alone produces atan2(0, -SOG) = 180° which
-      // jiggle between 0° and 180° as the boat sits stationary. 0.5 m/s gives
-      // enough headroom above typical GPS drift (~0.3–0.4 m/s on a fixed vessel).
-      if (tws < 0.5) return apparentWindAngleDeg;
-      var twa = math.atan2(twx, twy) * 180 / math.pi;
-      if (twa < 0) twa += 360;
-      return twa;
+  /// True wind angle (degrees from bow, 0–360). Paired with
+  /// [effectiveTrueWindSpeedMs] — both come from the same computation so the
+  /// (TWS, TWA) pair is always consistent within a frame.
+  double? get effectiveTrueWindAngleDeg => _computedTrueWind()?.$2 ?? trueWindAngleDeg;
+
+  /// Computes (TWS m/s, TWA deg 0–360) from apparent wind + SOG.
+  ///
+  /// Returns `null` when any required input is missing.
+  ///
+  /// Stationary-boat handling: when SOG is below typical GPS noise floor the
+  /// boat isn't really moving, so by definition true wind ≡ apparent wind. We
+  /// blend smoothly between "use apparent" and "subtract SOG vector" across a
+  /// narrow hysteresis band [_sogIdleMs, _sogMovingMs] so the displayed angle
+  /// doesn't snap when SOG flickers across the threshold (which used to make
+  /// TWA jump up to 180° when AWA ≈ 0° and AWS was small — the noise in SOG
+  /// would dominate `aws·cos(awa) − sog` and flip its sign).
+  (double, double)? _computedTrueWind() {
+    final aws = apparentWindSpeedMs;
+    final awaDeg = apparentWindAngleDeg;
+    final sog = sogMs;
+    if (aws == null || awaDeg == null || sog == null) return null;
+
+    // Smooth gating factor: 0 → use apparent, 1 → fully subtract SOG.
+    const sogIdleMs = 0.25;    // ≈ 0.5 kn — typical static GPS drift
+    const sogMovingMs = 0.75;  // ≈ 1.5 kn — boat clearly underway
+    double k;
+    if (sog <= sogIdleMs) {
+      k = 0;
+    } else if (sog >= sogMovingMs) {
+      k = 1;
+    } else {
+      k = (sog - sogIdleMs) / (sogMovingMs - sogIdleMs);
     }
-    return trueWindAngleDeg;
+
+    final awa = awaDeg * math.pi / 180;
+    final twx = aws * math.sin(awa);
+    final twy = aws * math.cos(awa) - k * sog;
+    final tws = math.sqrt(twx * twx + twy * twy);
+
+    // Degenerate vectors (essentially zero apparent wind and zero SOG): fall
+    // back to apparent so we don't return atan2(0, 0) noise.
+    if (tws < 1e-3) return (aws, awaDeg);
+
+    var twa = math.atan2(twx, twy) * 180 / math.pi;
+    if (twa < 0) twa += 360;
+    return (tws, twa);
   }
 
   TelemetryData copyWith({

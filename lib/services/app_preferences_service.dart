@@ -25,6 +25,7 @@ class AppPreferencesService {
   static const _keyForgottenN2kSources = 'forgotten_n2k_sources';
   static const _keyWindTwsSamples = 'wind_tws_samples';
   static const _keyWindAwsSamples = 'wind_aws_samples';
+  static const _keyWindSession = 'wind_session';
 
   // ── factory ──────────────────────────────────────────────────────────────
 
@@ -165,6 +166,21 @@ class AppPreferencesService {
     ]);
   }
 
+  Map<String, dynamic>? get windSession {
+    final raw = _prefs.getString(_keyWindSession);
+    if (raw == null) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      return decoded is Map<String, dynamic> ? decoded : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> saveWindSession(Map<String, dynamic> session) async {
+    await _prefs.setString(_keyWindSession, jsonEncode(session));
+  }
+
   // ── clear ─────────────────────────────────────────────────────────────────
 
   Future<void> clearAll() async {
@@ -175,5 +191,6 @@ class AppPreferencesService {
     await _prefs.remove(_keyForgottenN2kSources);
     await _prefs.remove(_keyWindTwsSamples);
     await _prefs.remove(_keyWindAwsSamples);
+    await _prefs.remove(_keyWindSession);
   }
 }

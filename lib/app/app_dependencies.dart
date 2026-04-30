@@ -44,12 +44,13 @@ class AppDependencies {
       }
     });
 
-    // Wind averages service — seed from persisted samples.
+    // Wind averages service — seed from persisted samples + session counters.
     final windAverages = WindAveragesService();
     windAverages.seedFromJson(
       twsSamples: preferences.windTwsSamples,
       awsSamples: preferences.windAwsSamples,
     );
+    windAverages.seedSessionFromJson(preferences.windSession);
 
     // Feed wind averages on every telemetry update; persist every 30 samples.
     var unsavedSamples = 0;
@@ -62,6 +63,7 @@ class AppDependencies {
         awsMs: t.apparentWindSpeedMs,
         twaDeg: t.effectiveTrueWindAngleDeg,
         sogMs: t.sogMs,
+        headingDeg: t.headingDeg,
         timestamp: t.updatedAt,
       );
       unsavedSamples++;
@@ -71,6 +73,7 @@ class AppDependencies {
           tws: windAverages.twsToJson(),
           aws: windAverages.awsToJson(),
         );
+        preferences.saveWindSession(windAverages.sessionToJson());
       }
     });
 
