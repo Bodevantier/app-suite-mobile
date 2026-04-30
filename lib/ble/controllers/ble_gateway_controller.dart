@@ -6,6 +6,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../../controllers/ble_controller.dart';
 import '../../models/gateway_command.dart';
 import '../../models/n2k_device_info.dart';
+import '../../services/app_preferences_service.dart';
 import '../framing/newline_message_framer.dart';
 import '../models/ble_gateway_event.dart';
 import '../models/device_list_snapshot.dart';
@@ -18,6 +19,7 @@ class BleGatewayController extends ChangeNotifier {
     required this.transport,
     required this.repository,
     this.telemetryController,
+    this.preferences,
     NewlineMessageFramer? framer,
   }) : _framer = framer ?? NewlineMessageFramer() {
     transport.addListener(_handleDependencyChanged);
@@ -25,16 +27,33 @@ class BleGatewayController extends ChangeNotifier {
     telemetryController?.addListener(_handleDependencyChanged);
     _chunkSubscription = transport.chunks.listen(_handleChunk);
     _lastConnected = transport.isConnected;
+    // Restore the persisted forget-list so swiped devices stay gone across
+    // app restarts (and across periodic gateway snapshots that resurface them).
+    final persisted = preferences?.forgottenN2kSources;
+    if (persisted != null) {
+      for (final entry in persisted.entries) {
+        _forgottenSources[entry.key] = entry.value;
+      }
+    }
   }
 
   final BleGatewayTransportService transport;
   final BleGatewayRepository repository;
   final BleController? telemetryController;
+  final AppPreferencesService? preferences;
   final NewlineMessageFramer _framer;
 
   late final StreamSubscription<BleTransportChunk> _chunkSubscription;
   bool _lastConnected = false;
   DateTime? _lastChunkAt;
+
+  /// Sources the user has explicitly removed (swipe-to-delete on home page).
+  /// Each entry stores the UTC time of dismissal. The src stays hidden
+  /// (across periodic gateway snapshots and across app restarts) until a
+  /// fresh **binary CAN frame** newer than the forget timestamp arrives —
+  /// the text snapshot from the STM32 never stamps `lastSeen` on the
+  /// binary tracker, so a stale snapshot cannot revive a forgotten device.
+  final Map<int, DateTime> _forgottenSources = <int, DateTime>{};
 
   /// Timestamp of the most recent BLE notification received from the gateway.
   /// Used by the UI to render a smooth liveness indicator that decays when
@@ -57,6 +76,35 @@ class BleGatewayController extends ChangeNotifier {
     // the binary N2K tracker has live wind/temperature flags and online status.
     final binary = telemetryController?.decodedDevices ?? const <N2kDeviceInfo>[];
     final text = repository.devices;
+
+    // Auto-revive: a forgotten src comes back only when a binary CAN frame
+    // newer than the forget timestamp arrives. The text snapshot path never
+    // touches the binary tracker's `lastSeen`, so the gateway re-listing the
+    // src in its periodic snapshot cannot resurrect it — only a real frame
+    // from the device on the wire can.
+    if (_forgottenSources.isNotEmpty && binary.isNotEmpty) {
+      final revived = <int>[];
+      _forgottenSources.forEach((src, forgetAt) {
+        for (final d in binary) {
+          if (d.src != src) continue;
+          final seen = d.lastSeen;
+          if (seen != null && seen.isAfter(forgetAt)) {
+            revived.add(src);
+          }
+          break;
+        }
+      });
+      if (revived.isNotEmpty) {
+        for (final s in revived) {
+          _forgottenSources.remove(s);
+        }
+        if (preferences != null) {
+          unawaited(
+            preferences!.saveForgottenN2kSources(_forgottenSources),
+          );
+        }
+      }
+    }
 
     if (binary.isEmpty && text.isEmpty) {
       return const <N2kDeviceInfo>[];
@@ -107,6 +155,7 @@ class BleGatewayController extends ChangeNotifier {
     }
     final merged = bySource.values
         .where((d) => !d.isBleGatewayDevice)
+        .where((d) => !_forgottenSources.containsKey(d.src))
         .toList()
       ..sort((a, b) => a.src.compareTo(b.src));
     return List<N2kDeviceInfo>.unmodifiable(merged);
@@ -178,6 +227,14 @@ class BleGatewayController extends ChangeNotifier {
   }
 
   Future<void> requestDeviceList() async {
+    // An explicit user-driven rescan clears the forgotten list — they want to
+    // see whatever is actually on the bus right now.
+    if (_forgottenSources.isNotEmpty) {
+      _forgottenSources.clear();
+      if (preferences != null) {
+        unawaited(preferences!.saveForgottenN2kSources(_forgottenSources));
+      }
+    }
     // Start the scan window BEFORE writing the command so any AddressClaim
     // frames already in the BLE notification pipeline are captured, not lost.
     telemetryController?.startDeviceScan();
@@ -188,6 +245,33 @@ class BleGatewayController extends ChangeNotifier {
     } catch (error) {
       rethrow;
     }
+  }
+
+  /// Forget a single N2K device by source address. Affects both the binary
+  /// tracker (live data) and the text snapshot (resolved names). Returns
+  /// true when at least one of those layers actually removed an entry.
+  bool forgetDevice(int source) {
+    // Mark as forgotten BEFORE clearing the underlying caches so the next
+    // periodic gateway snapshot (every ~30 s) cannot resurrect the entry.
+    // Stays forgotten across snapshots and app restarts (persisted).
+    final wasNew = !_forgottenSources.containsKey(source);
+    _forgottenSources[source] = DateTime.now().toUtc();
+    if (wasNew && preferences != null) {
+      unawaited(preferences!.saveForgottenN2kSources(_forgottenSources));
+    }
+    // Tell the gateway to drop its cached entry too, so the device truly
+    // disappears from subsequent device_list snapshots (rather than only
+    // being filtered out client-side). Best-effort: the volatile gateway
+    // state is re-synced on every BLE reconnect by [_resyncForgottenSources].
+    unawaited(_sendForgetCommand(source));
+    final removedFromText = repository.forgetDevice(source);
+    final beforeCount =
+        telemetryController?.decodedDevices.length ?? 0;
+    telemetryController?.forgetDevice(source);
+    final removedFromBinary =
+        (telemetryController?.decodedDevices.length ?? 0) < beforeCount;
+    notifyListeners();
+    return removedFromText || removedFromBinary;
   }
 
   Future<void> loadMockDeviceListFixture() async {
@@ -222,9 +306,34 @@ class BleGatewayController extends ChangeNotifier {
         repository.handleDisconnected();
         telemetryController?.reset();
         _lastChunkAt = null;
+      } else {
+        // BLE just came up: replay all persisted forget requests so the
+        // gateway (whose forget state is RAM-only) drops them again. Keeps
+        // the user-side forget list authoritative across gateway reboots.
+        unawaited(_resyncForgottenSources());
       }
     }
     notifyListeners();
+  }
+
+  Future<void> _sendForgetCommand(int source) async {
+    if (!transport.isConnected) return;
+    try {
+      await transport.writeCommandLine(
+        GatewayCommand.forgetDevice(source).toCommandLine(),
+      );
+    } catch (_) {
+      // Best-effort: failure is recovered on next reconnect resync.
+    }
+  }
+
+  Future<void> _resyncForgottenSources() async {
+    if (_forgottenSources.isEmpty) return;
+    // Snapshot the keys so we don't fight concurrent revive mutations.
+    final sources = _forgottenSources.keys.toList(growable: false);
+    for (final src in sources) {
+      await _sendForgetCommand(src);
+    }
   }
 
   @override

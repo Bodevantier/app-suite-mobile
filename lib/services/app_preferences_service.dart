@@ -22,6 +22,7 @@ class AppPreferencesService {
   static const _keyAddedDevices = 'added_devices';
   static const _keyKnownGatewayId = 'known_gateway_id';
   static const _keyCachedN2kDevices = 'cached_n2k_devices';
+  static const _keyForgottenN2kSources = 'forgotten_n2k_sources';
   static const _keyWindTwsSamples = 'wind_tws_samples';
   static const _keyWindAwsSamples = 'wind_aws_samples';
 
@@ -93,6 +94,45 @@ class AppPreferencesService {
     await _prefs.setString(_keyCachedN2kDevices, encoded);
   }
 
+  // ── forgotten N2K sources (swiped-away offline devices) ──────────────────
+  // Persisted as a JSON object {"<src>": "<ISO-8601 UTC>"}. The timestamp is
+  // the moment of dismissal — used by the controller to auto-revive a src
+  // only when a CAN frame newer than that instant arrives on the wire.
+
+  Map<int, DateTime> get forgottenN2kSources {
+    final raw = _prefs.getString(_keyForgottenN2kSources);
+    if (raw == null) return const <int, DateTime>{};
+    try {
+      final decoded = jsonDecode(raw);
+      // Backwards-compat: older builds stored a plain List<int>. Treat those
+      // entries as forgotten "since epoch" so any new CAN frame revives them.
+      if (decoded is List) {
+        return {
+          for (final e in decoded.whereType<num>())
+            e.toInt(): DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+        };
+      }
+      if (decoded is Map) {
+        final out = <int, DateTime>{};
+        decoded.forEach((k, v) {
+          final src = int.tryParse(k.toString());
+          final ts = v is String ? DateTime.tryParse(v) : null;
+          if (src != null && ts != null) out[src] = ts.toUtc();
+        });
+        return out;
+      }
+    } catch (_) {}
+    return const <int, DateTime>{};
+  }
+
+  Future<void> saveForgottenN2kSources(Map<int, DateTime> sources) async {
+    final encoded = jsonEncode({
+      for (final entry in sources.entries)
+        entry.key.toString(): entry.value.toUtc().toIso8601String(),
+    });
+    await _prefs.setString(_keyForgottenN2kSources, encoded);
+  }
+
   // ── wind sample ring buffers ──────────────────────────────────────────────
 
   List<dynamic> get windTwsSamples {
@@ -132,6 +172,7 @@ class AppPreferencesService {
     await _prefs.remove(_keyAddedDevices);
     await _prefs.remove(_keyKnownGatewayId);
     await _prefs.remove(_keyCachedN2kDevices);
+    await _prefs.remove(_keyForgottenN2kSources);
     await _prefs.remove(_keyWindTwsSamples);
     await _prefs.remove(_keyWindAwsSamples);
   }

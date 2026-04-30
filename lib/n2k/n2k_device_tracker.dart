@@ -81,6 +81,14 @@ class N2kDeviceTracker {
     _scanComplete = false;
   }
 
+  /// Forget a single device by source address. Used when the user swipes
+  /// an offline card away on the home page. If the same source later
+  /// re-appears on the bus (AddressClaim / live PGN), it will be re-added.
+  /// Returns true when the entry existed and was removed.
+  bool forgetDevice(int source) {
+    return _devices.remove(source) != null;
+  }
+
   /// Returns true if the scan-complete state changed (caller should
   /// call notifyListeners if it did).
   bool consumeFrames(Iterable<N2kFrame> frames) {

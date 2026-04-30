@@ -82,6 +82,7 @@ class AppDependencies {
         transport: transport,
         repository: repository,
         telemetryController: telemetryController,
+        preferences: preferences,
       ),
       autoConnectService: AutoConnectService(transport: transport),
       windAverages: windAverages,

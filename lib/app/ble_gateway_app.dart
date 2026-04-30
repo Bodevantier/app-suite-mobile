@@ -256,7 +256,7 @@ class _AppHomePageState extends State<AppHomePage> {
                                   // would be stale and misleading.
                                   final isDeviceLive = isConnected &&
                                       _isDeviceLive(device);
-                                  return _HomeDeviceCard(
+                                  final card = _HomeDeviceCard(
                                       device: device,
                                       isLive: isDeviceLive,
                                       onTap: !isDeviceLive
@@ -321,6 +321,65 @@ class _AppHomePageState extends State<AppHomePage> {
                                         );
                                       },
                                     );
+                                  // Offline devices can be removed with a
+                                  // right-to-left swipe. Live devices are
+                                  // never dismissible — they will reappear
+                                  // immediately on the next frame anyway.
+                                  if (isDeviceLive) {
+                                    return card;
+                                  }
+                                  return Dismissible(
+                                    key: ValueKey<String>(
+                                        'n2k-device-${device.src}'),
+                                    direction: DismissDirection.endToStart,
+                                    background: _OfflineDismissBackground(),
+                                    confirmDismiss: (_) async {
+                                      return await showDialog<bool>(
+                                            context: context,
+                                            builder: (dialogCtx) => AlertDialog(
+                                              title: const Text(
+                                                  'Remove offline device?'),
+                                              content: Text(
+                                                '${device.displayName} (src ${device.sourceAddress}) will be removed from the list. '
+                                                'It will reappear automatically if it comes back on the bus.',
+                                              ),
+                                              actions: [
+                                                TextButton(
+                                                  onPressed: () =>
+                                                      Navigator.of(dialogCtx)
+                                                          .pop(false),
+                                                  child:
+                                                      const Text('Cancel'),
+                                                ),
+                                                FilledButton.tonal(
+                                                  onPressed: () =>
+                                                      Navigator.of(dialogCtx)
+                                                          .pop(true),
+                                                  child:
+                                                      const Text('Remove'),
+                                                ),
+                                              ],
+                                            ),
+                                          ) ??
+                                          false;
+                                    },
+                                    onDismissed: (_) {
+                                      dependencies.bleGatewayController
+                                          .forgetDevice(device.src);
+                                      // Persist the trimmed cache so the
+                                      // node does not reappear on next launch
+                                      // before the gateway re-snapshots.
+                                      unawaited(
+                                        dependencies.preferences
+                                            .saveCachedN2kDevices(
+                                          dependencies
+                                              .bleGatewayController.devices
+                                              .toList(),
+                                        ),
+                                      );
+                                    },
+                                    child: card,
+                                  );
                                 },
                               ),
                       ),
@@ -459,6 +518,37 @@ class _HomeDeviceCard extends StatelessWidget {
     if (d.isWindDevice) return Colors.blue.shade600;
     if (d.isNavigationDevice) return Colors.green.shade700;
     return cs.secondary;
+  }
+}
+
+/// Red "delete" background revealed while swiping an offline device card.
+class _OfflineDismissBackground extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: cs.errorContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      alignment: Alignment.centerRight,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'Remove',
+            style: TextStyle(
+              color: cs.onErrorContainer,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Icon(Icons.delete_outline, color: cs.onErrorContainer),
+        ],
+      ),
+    );
   }
 }
 

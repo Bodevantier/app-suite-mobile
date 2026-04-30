@@ -184,6 +184,40 @@ class BleGatewayRepository extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Forget a single device by N2K source address. Removes the entry from
+  /// both the live device list and the cached snapshot so a subsequent app
+  /// restart does not resurrect the offline node from disk.
+  bool forgetDevice(int source) {
+    final beforeCount = _devices.length;
+    final remaining = _devices.where((d) => d.src != source).toList();
+    if (remaining.length == beforeCount) {
+      return false;
+    }
+    _devices = List<N2kDeviceInfo>.unmodifiable(remaining);
+
+    final snapshot = _latestSnapshot;
+    if (snapshot != null) {
+      final filtered = snapshot.devices.where((d) => d.src != source).toList();
+      if (filtered.length != snapshot.devices.length) {
+        _latestSnapshot = snapshot.copyWith(
+          devices: List<N2kDeviceInfo>.unmodifiable(filtered),
+        );
+      }
+    }
+    final building = _buildingSnapshot;
+    if (building != null) {
+      final filtered = building.devices.where((d) => d.src != source).toList();
+      if (filtered.length != building.devices.length) {
+        _buildingSnapshot = building.copyWith(
+          devices: List<N2kDeviceInfo>.unmodifiable(filtered),
+        );
+      }
+    }
+    _lastUpdateAt = DateTime.now().toUtc();
+    notifyListeners();
+    return true;
+  }
+
   void _applySnapshot(DeviceListSnapshot snapshot) {
     final dedupedDevices = dedupeDevicesBySrc(snapshot.devices);
     _latestSnapshot = snapshot.copyWith(devices: dedupedDevices);

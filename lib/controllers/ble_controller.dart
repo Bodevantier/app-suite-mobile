@@ -103,4 +103,11 @@ class BleController extends ChangeNotifier {
     _deviceTracker.reset();
     notifyListeners();
   }
+
+  /// Forget a single tracked device by N2K source address.
+  void forgetDevice(int source) {
+    if (_deviceTracker.forgetDevice(source)) {
+      notifyListeners();
+    }
+  }
 }

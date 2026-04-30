@@ -13,6 +13,17 @@ class GatewayCommand {
     return const GatewayCommand(command: 'request_device_list');
   }
 
+  /// Tell the gateway to drop its cached entry for [sourceAddress] so the
+  /// device disappears from subsequent device_list snapshots. The wire
+  /// format is the legacy short form `forget_device src=N\n` (parsed by
+  /// the ESP32 BLE command handler).
+  factory GatewayCommand.forgetDevice(int sourceAddress) {
+    return GatewayCommand(
+      command: 'forget_device',
+      deviceSourceAddress: sourceAddress,
+    );
+  }
+
   factory GatewayCommand.requestDeviceDetails(int sourceAddress) {
     return GatewayCommand(
       command: 'request_device_details',
@@ -43,6 +54,14 @@ class GatewayCommand {
         deviceSourceAddress == null &&
         payload.isEmpty) {
       return 'request_device_list\n';
+    }
+
+    // Short, ESP32-friendly form for forget_device so it doesn't need the
+    // full "cmd:" prefix parser path on the bridge.
+    if (command == 'forget_device' &&
+        deviceSourceAddress != null &&
+        payload.isEmpty) {
+      return 'forget_device src=$deviceSourceAddress\n';
     }
 
     final buffer = StringBuffer('cmd:$command');
