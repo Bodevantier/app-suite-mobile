@@ -142,11 +142,26 @@ class AppHomePage extends StatefulWidget {
 }
 
 class _AppHomePageState extends State<AppHomePage> {
+  // Minimum spacing between visible rebuilds. The underlying controllers
+  // notify on every BLE chunk (often 20+ Hz under heavy N2K traffic), which
+  // made the home page list and the per-card pulse indicator visibly jitter.
+  // Coalescing into ~4 frames per second still feels live but is rock steady.
+  static const Duration _kRebuildInterval = Duration(milliseconds: 250);
+
   Timer? _stalenessTicker;
+  Timer? _coalesceTimer;
+  DateTime? _lastRebuildAt;
+  Listenable? _listenable;
 
   @override
   void initState() {
     super.initState();
+    _listenable = Listenable.merge([
+      dependencies.appSetupController,
+      dependencies.bleGatewayController,
+      dependencies.autoConnectService,
+    ]);
+    _listenable!.addListener(_onSourceChanged);
     // Re-evaluate device freshness periodically so cards flip to "offline"
     // even when no new BLE notifications arrive (no notifyListeners fires
     // when a device simply stops transmitting).
@@ -160,21 +175,44 @@ class _AppHomePageState extends State<AppHomePage> {
 
   @override
   void dispose() {
+    _listenable?.removeListener(_onSourceChanged);
+    _coalesceTimer?.cancel();
     _stalenessTicker?.cancel();
     super.dispose();
+  }
+
+  void _onSourceChanged() {
+    if (!mounted) return;
+    final now = DateTime.now();
+    final last = _lastRebuildAt;
+    if (last == null || now.difference(last) >= _kRebuildInterval) {
+      // Far enough from the previous frame: rebuild immediately so the user
+      // sees fresh state with no perceptible delay.
+      _lastRebuildAt = now;
+      _coalesceTimer?.cancel();
+      _coalesceTimer = null;
+      setState(() {});
+      return;
+    }
+    // Inside the cool-down window: coalesce all further notifications into
+    // a single trailing rebuild so a burst of BLE chunks does not redraw
+    // the list 20+ times per second.
+    if (_coalesceTimer?.isActive ?? false) return;
+    final wait = _kRebuildInterval - now.difference(last);
+    _coalesceTimer = Timer(wait, () {
+      _coalesceTimer = null;
+      if (!mounted) return;
+      _lastRebuildAt = DateTime.now();
+      setState(() {});
+    });
   }
 
   AppDependencies get dependencies => widget.dependencies;
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: Listenable.merge([
-        dependencies.appSetupController,
-        dependencies.bleGatewayController,
-        dependencies.autoConnectService,
-      ]),
-      builder: (context, _) {
+    return Builder(
+      builder: (context) {
         // Show every N2K sensor the gateway currently sees on the bus
         // (excluding the gateway itself). The user has already chosen which
         // physical devices belong on their N2K network — the app should just

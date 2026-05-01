@@ -36,9 +36,12 @@ class WindDataPage extends StatefulWidget {
   State<WindDataPage> createState() => _WindDataPageState();
 }
 
+enum _SogUnit { kn, kmh, ms }
+
 class _WindDataPageState extends State<WindDataPage> {
   bool _showWindSpeedInKnots = false;
   bool _showHeatmap = false;
+  _SogUnit _sogUnit = _SogUnit.kn;
   // false = sailing convention (0–180° P/S), true = absolute 0–360°.
   bool _showAngleAsCompass = false;
   final PageController _pageController = PageController();
@@ -55,14 +58,23 @@ class _WindDataPageState extends State<WindDataPage> {
   @override
   void initState() {
     super.initState();
-    _historyTimer = Timer.periodic(
-      const Duration(seconds: 1),
-      (_) => _captureAngleSample(),
-    );
+    // Capture a sample every time new telemetry arrives — same rate as the
+    // arrow update — instead of a fixed 1-second timer.
+    widget.telemetryController.addListener(_captureAngleSample);
+  }
+
+  @override
+  void didUpdateWidget(covariant WindDataPage old) {
+    super.didUpdateWidget(old);
+    if (widget.telemetryController != old.telemetryController) {
+      old.telemetryController.removeListener(_captureAngleSample);
+      widget.telemetryController.addListener(_captureAngleSample);
+    }
   }
 
   @override
   void dispose() {
+    widget.telemetryController.removeListener(_captureAngleSample);
     _historyTimer?.cancel();
     _pageController.dispose();
     super.dispose();
@@ -81,9 +93,9 @@ class _WindDataPageState extends State<WindDataPage> {
     }
     _trim(_apparentHistory, cutoff);
     _trim(_trueHistory, cutoff);
-    // No setState — the gauge already rebuilds on telemetry; the history is
-    // read fresh from the painter on next telemetry tick. Toggling heatmap
-    // explicitly calls setState below.
+    // No setState needed — AnimatedBuilder already rebuilds on this same
+    // notification, which propagates the updated history to the gauge widget
+    // and triggers _AnimatedWindGaugeState.didUpdateWidget.
   }
 
   static void _trim(List<_AngleSample> list, DateTime cutoff) {
@@ -108,6 +120,21 @@ class _WindDataPageState extends State<WindDataPage> {
     setState(() {
       _showHeatmap = !_showHeatmap;
     });
+  }
+
+  void _toggleSogUnit() {
+    setState(() {
+      _sogUnit = _SogUnit.values[(_sogUnit.index + 1) % _SogUnit.values.length];
+    });
+  }
+
+  String? _formatSog(double? ms) {
+    if (ms == null) return null;
+    return switch (_sogUnit) {
+      _SogUnit.kn  => '${(ms * 1.94384).toStringAsFixed(1)} kn',
+      _SogUnit.kmh => '${(ms * 3.6).toStringAsFixed(1)} km/h',
+      _SogUnit.ms  => '${ms.toStringAsFixed(1)} m/s',
+    };
   }
 
   @override
@@ -199,9 +226,10 @@ class _WindDataPageState extends State<WindDataPage> {
                           speedLabel: 'AWS',
                           speedValue: _formatWindSpeed(apparentWindSpeed),
                           angleDeg: apparentWindAngle,
-                          sogMs: widget.hasNavigationDevice
-                              ? telemetry.sogMs
-                              : null,
+                          sogValue: _formatSog(
+                            widget.hasNavigationDevice ? telemetry.sogMs : null,
+                          ),
+                          onSogTap: _toggleSogUnit,
                           onSpeedTap: _toggleWindSpeedUnit,
                           showAngleAsCompass: _showAngleAsCompass,
                           onAngleTap: _toggleAngleUnit,
@@ -218,7 +246,8 @@ class _WindDataPageState extends State<WindDataPage> {
                             speedLabel: 'TWS',
                             speedValue: _formatWindSpeed(windSpeed),
                             angleDeg: windAngle,
-                            sogMs: telemetry.sogMs,
+                            sogValue: _formatSog(telemetry.sogMs),
+                            onSogTap: _toggleSogUnit,
                             onSpeedTap: _toggleWindSpeedUnit,
                             showAngleAsCompass: _showAngleAsCompass,
                             onAngleTap: _toggleAngleUnit,
@@ -293,7 +322,8 @@ class _WindModeView extends StatelessWidget {
     required this.speedLabel,
     required this.speedValue,
     required this.angleDeg,
-    this.sogMs,
+    this.sogValue,
+    this.onSogTap,
     this.onSpeedTap,
     this.showAngleAsCompass = false,
     this.onAngleTap,
@@ -307,7 +337,8 @@ class _WindModeView extends StatelessWidget {
   final String speedLabel;
   final String speedValue;
   final double? angleDeg;
-  final double? sogMs;
+  final String? sogValue;
+  final VoidCallback? onSogTap;
   final VoidCallback? onSpeedTap;
   final bool showAngleAsCompass;
   final VoidCallback? onAngleTap;
@@ -384,7 +415,8 @@ class _WindModeView extends StatelessWidget {
                     speedLabel: speedLabel,
                     speedValue: speedValue,
                     angleLabel: speedLabel == 'TWS' ? 'TWA' : 'AWA',
-                    sogMs: sogMs,
+                    sogValue: sogValue,
+                    onSogTap: onSogTap,
                     onSpeedTap: onSpeedTap,
                     showAngleAsCompass: showAngleAsCompass,
                     onAngleTap: onAngleTap,
@@ -405,7 +437,8 @@ class _WindBoatAngleView extends StatelessWidget {
     required this.speedLabel,
     required this.speedValue,
     required this.angleLabel,
-    this.sogMs,
+    this.sogValue,
+    this.onSogTap,
     this.onSpeedTap,
     this.showAngleAsCompass = false,
     this.onAngleTap,
@@ -418,7 +451,8 @@ class _WindBoatAngleView extends StatelessWidget {
   final String speedLabel;
   final String speedValue;
   final String angleLabel;
-  final double? sogMs;
+  final String? sogValue;
+  final VoidCallback? onSogTap;
   final VoidCallback? onSpeedTap;
   final bool showAngleAsCompass;
   final VoidCallback? onAngleTap;
@@ -433,6 +467,7 @@ class _WindBoatAngleView extends StatelessWidget {
         fontSize: 16,
         fontWeight: FontWeight.w800,
         color: Color(0xff1e293b),
+        fontFeatures: [FontFeature.tabularFigures()],
       ),
     );
   }
@@ -466,7 +501,10 @@ class _WindBoatAngleView extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 6),
-            value,
+            ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 72),
+              child: Center(child: value),
+            ),
           ],
         ),
       ),
@@ -509,9 +547,9 @@ class _WindBoatAngleView extends StatelessWidget {
             ),
           ],
         ),
-        if (sogMs != null) ...[
+        if (sogValue != null) ...[
           const SizedBox(height: 8),
-          _pill('SOG', _valueText('${(sogMs! * 1.94384).toStringAsFixed(1)} kn')),
+          _pill('SOG', _valueText(sogValue!), onTap: onSogTap),
         ],
         const SizedBox(height: 8),
       ],
@@ -673,6 +711,7 @@ class _AnimatedAngleTextState extends State<_AnimatedAngleText>
             fontSize: 16,
             fontWeight: FontWeight.w800,
             color: Color(0xff1e293b),
+            fontFeatures: [FontFeature.tabularFigures()],
           ),
         );
       },
@@ -703,6 +742,113 @@ class _AnimatedWindGaugeState extends State<_AnimatedWindGauge>
   late Animation<double> _animation;
   double _displayAngle = 0;
 
+  // Cached heatmap gradient — recomputed only when history grows or the
+  // heatmap is toggled on. Never runs inside the animation loop.
+  List<Color> _heatmapColors = const [];
+  List<double> _heatmapStops = const [];
+  // Track the last history length we built the cache for. Because the parent
+  // passes the same mutable list object every build, we cannot rely on
+  // old.history.length vs widget.history.length (they're the same object).
+  int _cachedHistoryLength = -1;
+
+  /// Bins, smooths, and colour-maps [widget.history] into gradient stop lists
+  /// stored in [_heatmapColors] / [_heatmapStops]. The painter reads these
+  /// directly and does zero computation of its own.
+  void _rebuildHeatmap() {
+    if (!widget.showHeatmap || widget.history.isEmpty) {
+      _heatmapColors = const [];
+      _heatmapStops = const [];
+      return;
+    }
+
+    const binCount = 720; // 0.5° per bin for an ultra-smooth ring
+    const binSizeDeg = 360.0 / binCount;
+    final raw = List<double>.filled(binCount, 0);
+
+    final now = DateTime.now();
+    // Exponential recency weighting: half-life of 60 s.
+    const halfLifeSec = 60.0;
+    final lambda = math.ln2 / halfLifeSec;
+    for (final s in widget.history) {
+      final ageSec = now.difference(s.timestamp).inMilliseconds / 1000.0;
+      if (ageSec < 0) continue;
+      final w = math.exp(-lambda * ageSec);
+      var deg = s.angleDeg % 360;
+      if (deg < 0) deg += 360;
+      final bin = (deg / binSizeDeg).floor() % binCount;
+      raw[bin] += w;
+    }
+
+    // Circular Gaussian smoothing — σ=8 bins ≈ 4° at 0.5°/bin resolution.
+    const sigma = 8.0;
+    final kernelRadius = (sigma * 3).ceil();
+    final kernel = List<double>.generate(
+      kernelRadius * 2 + 1,
+      (i) {
+        final x = i - kernelRadius;
+        return math.exp(-(x * x) / (2 * sigma * sigma));
+      },
+    );
+    final kernelSum = kernel.fold<double>(0, (a, b) => a + b);
+    final smoothed = List<double>.filled(binCount, 0);
+    double maxW = 0;
+    for (var i = 0; i < binCount; i++) {
+      double acc = 0;
+      for (var k = 0; k < kernel.length; k++) {
+        final idx = (i + k - kernelRadius) % binCount;
+        final wrapped = idx < 0 ? idx + binCount : idx;
+        acc += raw[wrapped] * kernel[k];
+      }
+      smoothed[i] = acc / kernelSum;
+      if (smoothed[i] > maxW) maxW = smoothed[i];
+    }
+    if (maxW <= 0) {
+      _heatmapColors = const [];
+      _heatmapStops = const [];
+      return;
+    }
+
+    // Smooth 3-stop colour ramp: transparent background → soft teal → warm
+    // amber. Gentle gamma (0.75) and linear alpha keep the transition gradual
+    // so the "cloud" blends rather than showing sharp colour bands.
+    const bgColor = Color(0xfff5f7fb);
+    Color colorFor(double intensity) {
+      // Gamma < 1 lifts mid-range visibility without crushing the low end.
+      final t = math.pow(intensity.clamp(0.0, 1.0), 0.75).toDouble();
+      final Color base;
+      if (t < 0.5) {
+        base = Color.lerp(
+          bgColor,
+          const Color(0xff14b8a6), // teal-500
+          t / 0.5,
+        )!;
+      } else {
+        base = Color.lerp(
+          const Color(0xff14b8a6), // teal-500
+          const Color(0xfff59e0b), // amber-500
+          (t - 0.5) / 0.5,
+        )!;
+      }
+      // Linear alpha: low-intensity areas are faint but not invisible.
+      return base.withValues(alpha: t.clamp(0.0, 1.0));
+    }
+
+    final colors = <Color>[];
+    final stops = <double>[];
+    for (var i = 0; i < binCount; i++) {
+      colors.add(colorFor(smoothed[i] / maxW));
+      stops.add((i + 0.5) / binCount);
+    }
+    // Seamless wrap: prepend last colour at 0.0, append first at 1.0.
+    colors.insert(0, colors.last);
+    stops.insert(0, 0.0);
+    colors.add(colors[1]);
+    stops.add(1.0);
+
+    _heatmapColors = colors;
+    _heatmapStops = stops;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -712,11 +858,22 @@ class _AnimatedWindGaugeState extends State<_AnimatedWindGauge>
       duration: const Duration(milliseconds: 300),
     );
     _animation = AlwaysStoppedAnimation(_displayAngle);
+    _rebuildHeatmap();
+    _cachedHistoryLength = widget.history.length;
   }
 
   @override
   void didUpdateWidget(_AnimatedWindGauge old) {
     super.didUpdateWidget(old);
+    // Rebuild heatmap cache only when history grows or the toggle changes —
+    // not on every animation frame. Use _cachedHistoryLength (not
+    // old.history.length) because the parent reuses the same list object.
+    if (widget.history.length != _cachedHistoryLength ||
+        widget.showHeatmap != old.showHeatmap) {
+      _rebuildHeatmap();
+      _cachedHistoryLength = widget.history.length;
+    }
+
     final newAngle = widget.angleDeg;
     if (newAngle == null || newAngle == old.angleDeg) return;
 
@@ -755,8 +912,8 @@ class _AnimatedWindGaugeState extends State<_AnimatedWindGauge>
                 size: Size(size, size),
                 painter: _WindGaugePainter(
                   angleDeg: _animation.value,
-                  history: widget.history,
-                  showHeatmap: widget.showHeatmap,
+                  heatmapColors: _heatmapColors,
+                  heatmapStops: _heatmapStops,
                 ),
               ),
             );
@@ -770,13 +927,14 @@ class _AnimatedWindGaugeState extends State<_AnimatedWindGauge>
 class _WindGaugePainter extends CustomPainter {
   const _WindGaugePainter({
     required this.angleDeg,
-    this.history = const [],
-    this.showHeatmap = false,
+    this.heatmapColors = const [],
+    this.heatmapStops = const [],
   });
 
   final double? angleDeg;
-  final List<_AngleSample> history;
-  final bool showHeatmap;
+  /// Pre-built gradient colours from [_AnimatedWindGaugeState._rebuildHeatmap].
+  final List<Color> heatmapColors;
+  final List<double> heatmapStops;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -785,133 +943,22 @@ class _WindGaugePainter extends CustomPainter {
     final center = Offset(cx, cy);
     final outerRadius = size.shortestSide * 0.44;
 
-    if (showHeatmap && history.isNotEmpty) {
+    if (heatmapColors.isNotEmpty) {
       _drawHeatmap(canvas, center, outerRadius);
     }
     _drawPortStarboardWash(canvas, center, outerRadius);
     _drawTicks(canvas, center, outerRadius);
     _drawPSLabels(canvas, center, outerRadius);
     _drawWindArrow(canvas, center, outerRadius * 0.82, angleDeg);
-    _drawBoat(canvas, center, size.shortestSide * 0.30);
+    final boatRadius = size.shortestSide * 0.30;
+    _drawBoat(canvas, center.translate(0, boatRadius * 0.19), boatRadius);
   }
 
-  /// Draws a soft polar density ring just outside the tick marks.
-  ///
-  /// Pipeline:
-  ///   1. Bin samples at 2° resolution with exponential recency weighting
-  ///      (half-life ≈ 1 min, so the last minute dominates but older shifts
-  ///      remain faintly visible up to the 5-min window).
-  ///   2. Apply a circular Gaussian blur across bins so adjacent angles bleed
-  ///      into each other — the eye reads this as a continuous "cloud" of
-  ///      probable wind directions instead of jagged stair-steps.
-  ///   3. Gamma-compress (γ=0.55) so a single recent sample is still visible
-  ///      against the dominant direction.
-  ///   4. Render as a stroked annulus filled by a SweepGradient with one stop
-  ///      per bin — smooth, gap-free, sub-degree-looking coloring even at
-  ///      modest bin counts. A faint MaskFilter blur softens the edges.
+  /// Draws the pre-built heatmap ring. All heavy computation (binning,
+  /// Gaussian smoothing, colour mapping) is done once in
+  /// [_AnimatedWindGaugeState._rebuildHeatmap] and cached there; this method
+  /// only issues a single GPU draw call.
   void _drawHeatmap(Canvas canvas, Offset center, double outerRadius) {
-    const binCount = 180; // 2° per bin
-    const binSizeDeg = 360.0 / binCount;
-    final raw = List<double>.filled(binCount, 0);
-
-    final now = DateTime.now();
-    // Exponential recency weighting: half-life of 60 s. Older samples never
-    // hit zero (within the 5-min window) so a long-term shift trail remains.
-    const halfLifeSec = 60.0;
-    final lambda = math.ln2 / halfLifeSec;
-    for (final s in history) {
-      final ageSec = now.difference(s.timestamp).inMilliseconds / 1000.0;
-      if (ageSec < 0) continue;
-      final w = math.exp(-lambda * ageSec);
-      var deg = s.angleDeg % 360;
-      if (deg < 0) deg += 360;
-      final bin = (deg / binSizeDeg).floor() % binCount;
-      raw[bin] += w;
-    }
-
-    // Circular Gaussian smoothing (σ ≈ 3 bins ≈ 6°). Cheap separable 1-D
-    // pass with wrap-around so we don't get a seam at 0°/360°.
-    const sigma = 3.0;
-    final kernelRadius = (sigma * 3).ceil();
-    final kernel = List<double>.generate(
-      kernelRadius * 2 + 1,
-      (i) {
-        final x = i - kernelRadius;
-        return math.exp(-(x * x) / (2 * sigma * sigma));
-      },
-    );
-    final kernelSum = kernel.fold<double>(0, (a, b) => a + b);
-    final smoothed = List<double>.filled(binCount, 0);
-    double maxW = 0;
-    for (var i = 0; i < binCount; i++) {
-      double acc = 0;
-      for (var k = 0; k < kernel.length; k++) {
-        final idx = (i + k - kernelRadius) % binCount;
-        final wrapped = idx < 0 ? idx + binCount : idx;
-        acc += raw[wrapped] * kernel[k];
-      }
-      smoothed[i] = acc / kernelSum;
-      if (smoothed[i] > maxW) maxW = smoothed[i];
-    }
-    if (maxW <= 0) return;
-
-    // Color ramp: cool/transparent for rare directions, warm/saturated for
-    // dominant ones. The lowest end blends into the page background
-    // (0xfff5f7fb) so empty sectors are invisible — the eye sees only the
-    // "cloud" of probable wind directions, not the ring outline. Mid- to
-    // high-intensity bins use a perceptually-ordered palette
-    // (teal → indigo → magenta → amber).
-    const bgColor = Color(0xfff5f7fb);
-    Color colorFor(double intensity) {
-      // Gamma to lift mid-range visibility.
-      final t = math.pow(intensity.clamp(0.0, 1.0), 0.55).toDouble();
-      late Color base;
-      if (t < 0.15) {
-        // Near-empty: stay on the background so the ring vanishes.
-        base = Color.lerp(
-          bgColor,
-          const Color(0xff14b8a6), // teal-500
-          t / 0.15,
-        )!;
-      } else if (t < 0.45) {
-        base = Color.lerp(
-          const Color(0xff14b8a6),
-          const Color(0xff6366f1), // indigo-500
-          (t - 0.15) / 0.30,
-        )!;
-      } else if (t < 0.75) {
-        base = Color.lerp(
-          const Color(0xff6366f1),
-          const Color(0xffec4899), // pink-500
-          (t - 0.45) / 0.30,
-        )!;
-      } else {
-        base = Color.lerp(
-          const Color(0xffec4899),
-          const Color(0xfff59e0b), // amber-500
-          (t - 0.75) / 0.25,
-        )!;
-      }
-      // Alpha grows quadratically from 0 so empty sectors fully disappear
-      // into the background and the peak is fully opaque.
-      final alpha = (t * t).clamp(0.0, 1.0);
-      return base.withValues(alpha: alpha);
-    }
-
-    // Build SweepGradient stops, one per bin centre. Rotate so 0° is up.
-    final colors = <Color>[];
-    final stops = <double>[];
-    for (var i = 0; i < binCount; i++) {
-      colors.add(colorFor(smoothed[i] / maxW));
-      stops.add((i + 0.5) / binCount);
-    }
-    // Close the loop seamlessly: prepend last colour at 0.0 and append first
-    // at 1.0 so the gradient wraps without a visible discontinuity.
-    colors.insert(0, colors.last);
-    stops.insert(0, 0.0);
-    colors.add(colors[1]);
-    stops.add(1.0);
-
     final ringInner = outerRadius + 4;
     final ringOuter = outerRadius + 18;
     final midRadius = (ringInner + ringOuter) / 2;
@@ -921,14 +968,11 @@ class _WindGaugePainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = ringOuter - ringInner
       ..strokeCap = StrokeCap.butt
-      // Soft edges — small blur reads as a glow rather than crispy bands.
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.2)
       ..shader = SweepGradient(
-        // SweepGradient starts at 3 o'clock by default. Rotate so the
-        // gradient's 0% stop aligns with the gauge's 12 o'clock (north / bow).
+        // SweepGradient starts at 3 o'clock; rotate to 12 o'clock (bow).
         transform: const GradientRotation(-math.pi / 2),
-        colors: colors,
-        stops: stops,
+        colors: heatmapColors,
+        stops: heatmapStops,
       ).createShader(ringRect);
 
     canvas.drawCircle(center, midRadius, paint);
@@ -1122,10 +1166,9 @@ class _WindGaugePainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _WindGaugePainter oldDelegate) {
     return oldDelegate.angleDeg != angleDeg ||
-        oldDelegate.showHeatmap != showHeatmap ||
-        // History list is mutated in place; identity comparison would miss
-        // changes. Length is a cheap proxy for "new sample arrived".
-        oldDelegate.history.length != history.length;
+        // Heatmap list is rebuilt as a new object by _rebuildHeatmap;
+        // identity check is O(1) and fires only when history actually changes.
+        !identical(oldDelegate.heatmapColors, heatmapColors);
   }
 }
 

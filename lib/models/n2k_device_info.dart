@@ -130,7 +130,18 @@ class N2kDeviceInfo {
   String get displayModel => _displayText(model, 'Unknown model');
   String get displayManufacturer =>
       _displayText(manufacturer, 'Unknown manufacturer');
-  String get displayCategory => _displayText(category, 'unknown');
+
+  /// Stable, human-readable category for the UI. Resolved with the same
+  /// priority used by the home-page router (temperature > wind > navigation >
+  /// gateway > raw category) so a node that occasionally emits a PGN from
+  /// another family does not make the displayed label flicker frame-to-frame.
+  String get displayCategory {
+    if (isTemperatureDevice) return 'temperature';
+    if (isWindDevice) return 'wind';
+    if (isNavigationDevice) return 'navigation';
+    if (isBleGatewayDevice) return 'gateway';
+    return _displayText(category, 'unknown');
+  }
   String get displaySoftwareVersion => _displayText(softwareVersion, 'unknown');
   String get displayHardwareVersion => _displayText(modelVersion, 'unknown');
   String get displaySerialNumber => _displayText(serialNumber, 'unknown');

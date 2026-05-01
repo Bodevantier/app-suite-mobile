@@ -184,8 +184,10 @@ class N2kDeviceTracker {
 
   void _markLiveWind(int source) {
     final device = _ensureDevice(source);
-    // PGN evidence wins over the AddressClaim function code, which is not
-    // standardized in N2K Class 85 beyond Atmospheric (130) / Aquatic (140).
+    // hasLiveWindData is sticky and is the authoritative signal for
+    // isWindDevice. category is set from PGN evidence too, but the displayed
+    // label resolves a priority (temperature > wind > navigation) so a node
+    // that emits both PGN families will not flicker on the UI.
     _devices[source] = device.copyWith(
       hasLiveWindData: true,
       category: 'wind',
