@@ -14,6 +14,7 @@ class N2kDeviceInfo {
     this.hasRxPgnList = false,
     this.hasLiveWindData = false,
     this.hasLiveTemperatureData = false,
+    this.hasLiveFluidLevelData = false,
     this.serialNumber,
     this.softwareVersion,
     this.modelVersion,
@@ -41,6 +42,7 @@ class N2kDeviceInfo {
   final bool hasRxPgnList;
   final bool hasLiveWindData;
   final bool hasLiveTemperatureData;
+  final bool hasLiveFluidLevelData;
   final String? serialNumber;
   final String? softwareVersion;
   final String? modelVersion;
@@ -67,6 +69,15 @@ class N2kDeviceInfo {
     if (hasLiveTemperatureData) return true;
     if (supportedPgns.any(_temperaturePgns.contains)) return true;
     return category == 'temperature';
+  }
+
+  // Generic detection: any device advertising the Fluid Level PGN (127505)
+  // is a tank-level source (water / fuel / waste etc.).
+  static const _fluidLevelPgns = {127505};
+  bool get isFluidLevelDevice {
+    if (hasLiveFluidLevelData) return true;
+    if (supportedPgns.any(_fluidLevelPgns.contains)) return true;
+    return category == 'fluid';
   }
 
   // Generic detection: any device advertising position or COG/SOG PGNs is a
@@ -107,6 +118,9 @@ class N2kDeviceInfo {
       if (hasLiveTemperatureData) {
         return 'This node is currently broadcasting live temperature data.';
       }
+      if (hasLiveFluidLevelData) {
+        return 'This node is currently broadcasting live fluid (tank) level data.';
+      }
       return 'Device name provided by gateway/device metadata.';
     }
     if (!hasProductInfo) {
@@ -137,6 +151,7 @@ class N2kDeviceInfo {
   /// another family does not make the displayed label flicker frame-to-frame.
   String get displayCategory {
     if (isTemperatureDevice) return 'temperature';
+    if (isFluidLevelDevice) return 'fluid';
     if (isWindDevice) return 'wind';
     if (isNavigationDevice) return 'navigation';
     if (isBleGatewayDevice) return 'gateway';
@@ -161,6 +176,8 @@ class N2kDeviceInfo {
       'hasTxPgnList': hasTxPgnList,
       'hasRxPgnList': hasRxPgnList,
       'hasLiveWindData': hasLiveWindData,
+      'hasLiveTemperatureData': hasLiveTemperatureData,
+      'hasLiveFluidLevelData': hasLiveFluidLevelData,
       if (serialNumber != null) 'serialNumber': serialNumber,
       if (softwareVersion != null) 'softwareVersion': softwareVersion,
       if (modelVersion != null) 'modelVersion': modelVersion,
@@ -198,6 +215,8 @@ class N2kDeviceInfo {
       hasTxPgnList: _parseBool(json['hasTxPgnList']),
       hasRxPgnList: _parseBool(json['hasRxPgnList']),
       hasLiveWindData: _parseBool(json['hasLiveWindData']),
+      hasLiveTemperatureData: _parseBool(json['hasLiveTemperatureData']),
+      hasLiveFluidLevelData: _parseBool(json['hasLiveFluidLevelData']),
       serialNumber: _parseString(json['serialNumber']),
       softwareVersion: _parseString(json['softwareVersion']),
       modelVersion: _parseString(
@@ -235,6 +254,7 @@ class N2kDeviceInfo {
     bool? hasRxPgnList,
     bool? hasLiveWindData,
     bool? hasLiveTemperatureData,
+    bool? hasLiveFluidLevelData,
     String? serialNumber,
     String? softwareVersion,
     String? modelVersion,
@@ -262,6 +282,7 @@ class N2kDeviceInfo {
       hasRxPgnList: hasRxPgnList ?? this.hasRxPgnList,
       hasLiveWindData: hasLiveWindData ?? this.hasLiveWindData,
       hasLiveTemperatureData: hasLiveTemperatureData ?? this.hasLiveTemperatureData,
+      hasLiveFluidLevelData: hasLiveFluidLevelData ?? this.hasLiveFluidLevelData,
       serialNumber: serialNumber ?? this.serialNumber,
       softwareVersion: softwareVersion ?? this.softwareVersion,
       modelVersion: modelVersion ?? this.modelVersion,
@@ -366,6 +387,8 @@ class N2kDeviceInfo {
         case 'hasTxPgnList':
         case 'hasRxPgnList':
         case 'hasLiveWindData':
+        case 'hasLiveTemperatureData':
+        case 'hasLiveFluidLevelData':
         case 'softwareVersion':
         case 'hardwareVersion':
         case 'modelVersion':

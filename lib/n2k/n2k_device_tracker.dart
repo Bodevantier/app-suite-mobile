@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 
 import '../models/n2k_device_info.dart';
@@ -14,6 +16,7 @@ class N2kDeviceTracker {
   static const int pgnWind = 130306;
   static const int pgnTemperatureExt = 130316;
   static const int pgnTemperature = 130312;
+  static const int pgnFluidLevel = 127505;
 
   /// Quiet-window: scan considered done when no device-identity frame
   /// arrives for this long after the last one (mirrors Test-16).
@@ -116,6 +119,9 @@ class N2kDeviceTracker {
       if (frame.pgn == pgnTemperatureExt || frame.pgn == pgnTemperature) {
         _markLiveTemperature(frame.sourceAddress);
       }
+      if (frame.pgn == pgnFluidLevel) {
+        _markLiveFluidLevel(frame.sourceAddress);
+      }
       if (frame.pgn == pgnPgnList) {
         _consumePgnList(frame.sourceAddress, frame.data.sublist(0, frame.dlc));
       }
@@ -199,6 +205,14 @@ class N2kDeviceTracker {
     _devices[source] = device.copyWith(
       hasLiveTemperatureData: true,
       category: 'temperature',
+    );
+  }
+
+  void _markLiveFluidLevel(int source) {
+    final device = _ensureDevice(source);
+    _devices[source] = device.copyWith(
+      hasLiveFluidLevelData: true,
+      category: 'fluid',
     );
   }
 
@@ -340,7 +354,11 @@ class N2kDeviceTracker {
       }
       chars.add(value);
     }
-    return String.fromCharCodes(chars).trim();
+    // Sensors may emit UTF-8 (e.g. "–", "Ω") in product info / config
+    // strings even though NMEA 2000 nominally specifies ASCII. Decoding as
+    // UTF-8 with allowMalformed keeps plain ASCII identical and recovers
+    // multibyte glyphs from compliant senders without crashing on garbage.
+    return utf8.decode(chars, allowMalformed: true).trim();
   }
 
   _VarString _readVarString(List<int> bytes, int offset) {

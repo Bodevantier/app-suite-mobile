@@ -15,6 +15,10 @@ class TelemetryData {
     this.sogMs,
     this.batteryV,
     this.temperatureC,
+    this.fluidLevelPct,
+    this.fluidType,
+    this.fluidInstance,
+    this.fluidCapacityL,
     this.unknownPgns,
     this.model,
     this.deviceId,
@@ -40,6 +44,20 @@ class TelemetryData {
   final double? sogMs;
   final double? batteryV;
   final double? temperatureC;
+
+  /// Fluid (tank) level percentage 0–100 from PGN 127505.
+  final double? fluidLevelPct;
+
+  /// Fluid type label decoded from PGN 127505 (e.g. "Fuel", "Water",
+  /// "Gray water", "Live well", "Oil", "Black water"). Null when unknown.
+  final String? fluidType;
+
+  /// Tank instance from PGN 127505 (0–14, 15 = N/A).
+  final int? fluidInstance;
+
+  /// Tank capacity in litres from PGN 127505. Null when not provided.
+  final double? fluidCapacityL;
+
   final int? unknownPgns;
   final String? model;
   final int? deviceId;
@@ -116,6 +134,10 @@ class TelemetryData {
     double? sogMs,
     double? batteryV,
     double? temperatureC,
+    double? fluidLevelPct,
+    String? fluidType,
+    int? fluidInstance,
+    double? fluidCapacityL,
     int? unknownPgns,
     String? model,
     int? deviceId,
@@ -136,6 +158,10 @@ class TelemetryData {
       sogMs: sogMs ?? this.sogMs,
       batteryV: batteryV ?? this.batteryV,
       temperatureC: temperatureC ?? this.temperatureC,
+      fluidLevelPct: fluidLevelPct ?? this.fluidLevelPct,
+      fluidType: fluidType ?? this.fluidType,
+      fluidInstance: fluidInstance ?? this.fluidInstance,
+      fluidCapacityL: fluidCapacityL ?? this.fluidCapacityL,
       unknownPgns: unknownPgns ?? this.unknownPgns,
       model: model ?? this.model,
       deviceId: deviceId ?? this.deviceId,

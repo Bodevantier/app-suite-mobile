@@ -8,11 +8,15 @@ import '../pages/ble_connection_page.dart';
 import '../pages/ble_monitor_page.dart';
 import '../pages/n2k_device_detail_page.dart';
 import '../pages/navigation_data_page.dart';
+import '../pages/node_settings_page.dart';
 import '../pages/splash_screen.dart';
 import '../pages/temperature_data_page.dart';
+import '../pages/fluid_level_data_page.dart';
 import '../pages/welcome_page.dart';
 import '../pages/wind_data_page.dart';
 import '../widgets/live_activity_indicator.dart';
+import '../services/node_settings_service.dart';
+import '../controllers/ble_controller.dart';
 import 'app_dependencies.dart';
 
 class BleGatewayApp extends StatefulWidget {
@@ -297,6 +301,21 @@ class _AppHomePageState extends State<AppHomePage> {
                                   final card = _HomeDeviceCard(
                                       device: device,
                                       isLive: isDeviceLive,
+                                      settingsService:
+                                          dependencies.nodeSettings,
+                                      telemetryController:
+                                          dependencies.telemetryController,
+                                      onOpenSettings: () {
+                                        Navigator.of(context).push(
+                                          MaterialPageRoute<void>(
+                                            builder: (_) => NodeSettingsPage(
+                                              device: device,
+                                              settingsService:
+                                                  dependencies.nodeSettings,
+                                            ),
+                                          ),
+                                        );
+                                      },
                                       onTap: !isDeviceLive
                                           ? null
                                           : () {
@@ -310,6 +329,21 @@ class _AppHomePageState extends State<AppHomePage> {
                                                 device: device,
                                                 telemetryController: dependencies
                                                     .telemetryController,
+                                              ),
+                                            ),
+                                          );
+                                          return;
+                                        }
+
+                                        if (device.isFluidLevelDevice) {
+                                          Navigator.of(context).push(
+                                            MaterialPageRoute<void>(
+                                              builder: (_) => FluidLevelDataPage(
+                                                device: device,
+                                                telemetryController: dependencies
+                                                    .telemetryController,
+                                                settingsService:
+                                                    dependencies.nodeSettings,
                                               ),
                                             ),
                                           );
@@ -447,34 +481,163 @@ bool _isDeviceLive(N2kDeviceInfo device) {
   return DateTime.now().difference(lastSeen) < _kDeviceOfflineAfter;
 }
 
-class _HomeDeviceCard extends StatelessWidget {
+class _HomeDeviceCard extends StatefulWidget {
   const _HomeDeviceCard({
     required this.device,
     required this.isLive,
     required this.onTap,
+    this.settingsService,
+    this.telemetryController,
+    this.onOpenSettings,
   });
 
   final N2kDeviceInfo device;
   final bool isLive;
   final VoidCallback? onTap;
+  final NodeSettingsService? settingsService;
+  final BleController? telemetryController;
+  final VoidCallback? onOpenSettings;
+
+  @override
+  State<_HomeDeviceCard> createState() => _HomeDeviceCardState();
+}
+
+class _HomeDeviceCardState extends State<_HomeDeviceCard>
+    with SingleTickerProviderStateMixin {
+  // Slow, smooth pulse — eased sine, not a hard on/off blink — so the card
+  // breathes red rather than flashing aggressively. ~2.4 s full cycle.
+  late final AnimationController _pulse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 2400),
+  );
+  late final Animation<double> _pulseEased = CurvedAnimation(
+    parent: _pulse,
+    curve: Curves.easeInOutSine,
+    reverseCurve: Curves.easeInOutSine,
+  );
+
+  bool _alarmActive = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _evaluateAlarm();
+  }
+
+  @override
+  void didUpdateWidget(covariant _HomeDeviceCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _evaluateAlarm();
+  }
+
+  void _evaluateAlarm() {
+    final active = _isAlarmActive();
+    if (active == _alarmActive) return;
+    _alarmActive = active;
+    if (active) {
+      _pulse.repeat(reverse: true);
+    } else {
+      _pulse.stop();
+      _pulse.value = 0;
+    }
+  }
+
+  bool _isAlarmActive() {
+    if (!widget.isLive) return false;
+    if (!widget.device.isFluidLevelDevice) return false;
+    final settings = widget.settingsService?.forDevice(widget.device);
+    if (settings == null || !settings.lowLevelAlarmEnabled) return false;
+    final level = widget.telemetryController?.telemetry.fluidLevelPct;
+    if (level == null) return false;
+    return level <= settings.lowLevelAlarmPct;
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
+    final device = widget.device;
     final icon = _iconFor(device);
     final color = _colorFor(device, cs);
-    final mutedAlpha = isLive ? 1.0 : 0.45;
+    final mutedAlpha = widget.isLive ? 1.0 : 0.45;
+    return AnimatedBuilder(
+      animation: Listenable.merge([
+        widget.settingsService,
+        widget.telemetryController,
+        _pulseEased,
+      ]),
+      builder: (context, _) {
+        // Re-evaluate every rebuild — settings or telemetry may have changed
+        // since the last frame and we need to start/stop the pulse promptly.
+        _evaluateAlarm();
+        final settings = widget.settingsService?.forDevice(device);
+        final overrideName = settings?.customName;
+        final displayName =
+            (overrideName != null && overrideName.trim().isNotEmpty)
+                ? overrideName.trim()
+                : device.displayName;
+        return _buildCard(
+          context,
+          cs: cs,
+          tt: tt,
+          icon: icon,
+          color: color,
+          mutedAlpha: mutedAlpha,
+          displayName: displayName,
+          alarmIntensity: _alarmActive ? _pulseEased.value : 0.0,
+        );
+      },
+    );
+  }
 
+  Widget _buildCard(
+    BuildContext context, {
+    required ColorScheme cs,
+    required TextTheme tt,
+    required IconData icon,
+    required Color color,
+    required double mutedAlpha,
+    required String displayName,
+    required double alarmIntensity,
+  }) {
+    final device = widget.device;
+    final isLive = widget.isLive;
+    // Blend card surface from neutral toward a soft red as the pulse rises.
+    // We never go fully saturated — the card must remain readable and the
+    // animation must feel like a heartbeat, not a strobe.
+    final cardColor = alarmIntensity > 0
+        ? Color.lerp(
+            Theme.of(context).cardColor,
+            const Color(0xffef4444), // red-500
+            0.10 + 0.30 * alarmIntensity,
+          )
+        : null;
+    final borderColor = alarmIntensity > 0
+        ? const Color(0xffef4444).withValues(
+            alpha: 0.35 + 0.55 * alarmIntensity,
+          )
+        : null;
     return Opacity(
       opacity: isLive ? 1.0 : 0.7,
       child: Card(
         margin: const EdgeInsets.only(bottom: 10),
         elevation: 1,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        color: cardColor,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: borderColor != null
+              ? BorderSide(color: borderColor, width: 1.2)
+              : BorderSide.none,
+        ),
         child: InkWell(
           borderRadius: BorderRadius.circular(12),
-          onTap: onTap,
+          onTap: widget.onTap,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             child: Row(
@@ -500,7 +663,7 @@ class _HomeDeviceCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        device.displayName,
+                        displayName,
                         style: tt.titleMedium?.copyWith(
                           fontWeight: FontWeight.w600,
                         ),
@@ -534,6 +697,21 @@ class _HomeDeviceCard extends StatelessWidget {
                   size: 18,
                   color: cs.onSurface.withValues(alpha: 0.3),
                 ),
+                // Per-device settings gear. Hit area is large enough to
+                // hit reliably without intercepting the rest of the card.
+                if (widget.onOpenSettings != null)
+                  IconButton(
+                    tooltip: 'Device settings',
+                    icon: const Icon(Icons.settings_outlined, size: 20),
+                    color: cs.onSurface.withValues(alpha: 0.55),
+                    onPressed: widget.onOpenSettings,
+                    constraints: const BoxConstraints(
+                      minWidth: 36,
+                      minHeight: 36,
+                    ),
+                    padding: EdgeInsets.zero,
+                    visualDensity: VisualDensity.compact,
+                  ),
               ],
             ),
           ),
@@ -545,6 +723,7 @@ class _HomeDeviceCard extends StatelessWidget {
   static IconData _iconFor(N2kDeviceInfo d) {
     if (d.isBleGatewayDevice) return Icons.bluetooth;
     if (d.isTemperatureDevice) return Icons.thermostat;
+    if (d.isFluidLevelDevice) return Icons.water_drop;
     if (d.isWindDevice) return Icons.air;
     if (d.isNavigationDevice) return Icons.satellite_alt;
     return Icons.sensors;
@@ -553,6 +732,7 @@ class _HomeDeviceCard extends StatelessWidget {
   static Color _colorFor(N2kDeviceInfo d, ColorScheme cs) {
     if (d.isBleGatewayDevice) return cs.primary;
     if (d.isTemperatureDevice) return Colors.orange.shade700;
+    if (d.isFluidLevelDevice) return Colors.blue.shade700;
     if (d.isWindDevice) return Colors.blue.shade600;
     if (d.isNavigationDevice) return Colors.green.shade700;
     return cs.secondary;

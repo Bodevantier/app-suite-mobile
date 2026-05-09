@@ -6,6 +6,7 @@ import '../ble/services/ble_gateway_transport.dart';
 import '../controllers/app_setup_controller.dart';
 import '../controllers/ble_controller.dart';
 import '../services/app_preferences_service.dart';
+import '../services/node_settings_service.dart';
 import '../services/wind_averages_service.dart';
 
 class AppDependencies {
@@ -16,10 +17,12 @@ class AppDependencies {
     required this.preferences,
     required this.autoConnectService,
     required this.windAverages,
+    required this.nodeSettings,
   });
 
   static Future<AppDependencies> standard() async {
     final preferences = await AppPreferencesService.load();
+    final nodeSettings = await NodeSettingsService.load();
 
     final telemetryController = BleController();
     final repository = BleGatewayRepository();
@@ -89,6 +92,7 @@ class AppDependencies {
       ),
       autoConnectService: AutoConnectService(transport: transport),
       windAverages: windAverages,
+      nodeSettings: nodeSettings,
     );
   }
 
@@ -98,4 +102,5 @@ class AppDependencies {
   final BleGatewayController bleGatewayController;
   final AutoConnectService autoConnectService;
   final WindAveragesService windAverages;
+  final NodeSettingsService nodeSettings;
 }

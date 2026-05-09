@@ -11,6 +11,17 @@ class N2kTelemetryDecoder {
   static const int pgnBattery = 127508;
   static const int pgnTemperatureExt = 130316;
   static const int pgnTemperature = 130312;
+  static const int pgnFluidLevel = 127505;
+
+  static const List<String> _fluidTypeLabels = <String>[
+    'Fuel',         // 0
+    'Water',        // 1
+    'Gray water',   // 2
+    'Live well',    // 3
+    'Oil',          // 4
+    'Black water',  // 5
+    'Fuel gasoline',// 6
+  ];
 
   TelemetryData decode(Iterable<N2kFrame> frames, {TelemetryData? previous}) {
     var telemetry = previous ?? TelemetryData.empty();
@@ -173,6 +184,46 @@ class N2kTelemetryDecoder {
             );
           }
           break;
+        case pgnFluidLevel:
+          // PGN 127505 – Fluid Level (single-frame, 8 bytes):
+          //   byte 0 low nibble  = Tank instance (0–14, 15 = N/A)
+          //   byte 0 high nibble = Fluid type   (0=Fuel, 1=Water, 2=Gray,
+          //                                       3=Live well, 4=Oil, 5=Black,
+          //                                       6=Fuel gasoline, 14=Error,
+          //                                       15=Unavailable)
+          //   bytes 1-2 = Level (int16 LE, 0.004 % per LSB)
+          //   bytes 3-6 = Capacity (uint32 LE, 0.1 L per LSB)
+          //   byte 7 = reserved (0xff)
+          if (frame.dlc >= 8) {
+            final b0 = data[0];
+            final instance = b0 & 0x0f;
+            final typeCode = (b0 >> 4) & 0x0f;
+            final levelRaw = _readInt16Le(data, 1);
+            final levelPct = levelRaw * 0.004;
+            final capacityRaw = _readUint32Le(data, 3);
+            // 0xFFFFFFFF means "data not available".
+            final double? capacityL =
+                capacityRaw == 0xFFFFFFFF ? null : capacityRaw * 0.1;
+            String? typeLabel;
+            if (typeCode < _fluidTypeLabels.length) {
+              typeLabel = _fluidTypeLabels[typeCode];
+            } else if (typeCode == 14) {
+              typeLabel = 'Error';
+            } else if (typeCode == 15) {
+              typeLabel = null;
+            } else {
+              typeLabel = 'Type $typeCode';
+            }
+            telemetry = telemetry.copyWith(
+              fluidLevelPct: levelPct,
+              fluidType: typeLabel,
+              fluidInstance: instance,
+              fluidCapacityL: capacityL,
+              rawText: 'binary:fluidlevel',
+              updatedAt: DateTime.now(),
+            );
+          }
+          break;
       }
     }
 
@@ -185,6 +236,18 @@ class N2kTelemetryDecoder {
 
   int _readUint16Le(List<int> bytes, int offset) {
     return bytes[offset] | (bytes[offset + 1] << 8);
+  }
+
+  int _readInt16Le(List<int> bytes, int offset) {
+    final value = bytes[offset] | (bytes[offset + 1] << 8);
+    return value & 0x8000 != 0 ? value - 0x10000 : value;
+  }
+
+  int _readUint32Le(List<int> bytes, int offset) {
+    return bytes[offset] |
+        (bytes[offset + 1] << 8) |
+        (bytes[offset + 2] << 16) |
+        (bytes[offset + 3] << 24);
   }
 
   int _readUint24Le(List<int> bytes, int offset) {

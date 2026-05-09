@@ -184,11 +184,13 @@ class _SetupDeviceCard extends StatelessWidget {
     // Temperature must be checked before wind.
     final pageLabel = device.isTemperatureDevice
         ? 'Temperature page'
-        : device.isWindDevice
-            ? 'Wind page'
-            : device.isNavigationDevice
-                ? 'Navigation page'
-                : 'Details';
+        : device.isFluidLevelDevice
+            ? 'Fluid level page'
+            : device.isWindDevice
+                ? 'Wind page'
+                : device.isNavigationDevice
+                    ? 'Navigation page'
+                    : 'Details';
 
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
@@ -261,6 +263,7 @@ class _SetupDeviceCard extends StatelessWidget {
   static IconData _iconFor(N2kDeviceInfo d) {
     if (d.isBleGatewayDevice) return Icons.bluetooth;
     if (d.isTemperatureDevice) return Icons.thermostat;
+    if (d.isFluidLevelDevice) return Icons.water_drop;
     if (d.isWindDevice) return Icons.air;
     if (d.isNavigationDevice) return Icons.satellite_alt;
     return Icons.sensors;
@@ -269,6 +272,7 @@ class _SetupDeviceCard extends StatelessWidget {
   static Color _colorFor(N2kDeviceInfo d, ColorScheme cs) {
     if (d.isBleGatewayDevice) return cs.primary;
     if (d.isTemperatureDevice) return Colors.orange.shade700;
+    if (d.isFluidLevelDevice) return Colors.blue.shade700;
     if (d.isWindDevice) return Colors.blue.shade600;
     if (d.isNavigationDevice) return Colors.green.shade700;
     return cs.secondary;

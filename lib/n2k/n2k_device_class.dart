@@ -76,8 +76,13 @@ String? n2kCategoryFromCodes(int? deviceClass, int? deviceFunction) {
     }
     return 'communication';
   }
+  if (deviceClass == N2kDeviceClass.instrumentation) {
+    // Project convention (matches SDolve Water/Fuel Level firmware):
+    //   class 80 (Instrumentation) + function 150 = Fluid (tank) level sender.
+    if (deviceFunction == 150) return 'fluid';
+    return 'instrumentation';
+  }
   switch (deviceClass) {
-    case N2kDeviceClass.instrumentation:  return 'instrumentation';
     case N2kDeviceClass.propulsion:       return 'propulsion';
     case N2kDeviceClass.steering:         return 'steering';
     case N2kDeviceClass.safety:           return 'safety';

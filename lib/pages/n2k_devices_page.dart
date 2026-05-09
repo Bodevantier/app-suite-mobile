@@ -281,6 +281,12 @@ class _N2kDeviceCard extends StatelessWidget {
                             label: 'Temp',
                             color: Colors.orange.shade700,
                           ),
+                        if (device.isFluidLevelDevice &&
+                            device.category != 'fluid')
+                          _SmallChip(
+                            label: 'Fluid',
+                            color: Colors.blue.shade700,
+                          ),
                         if (device.isNavigationDevice &&
                             device.category != 'navigation')
                           _SmallChip(
@@ -350,6 +356,7 @@ class _N2kDeviceCard extends StatelessWidget {
     // Temperature takes priority over wind — a sensor can have both live flags
     // but show the more specific icon (e.g. SDolve Temperature).
     if (d.isTemperatureDevice) return Icons.thermostat;
+    if (d.isFluidLevelDevice) return Icons.water_drop;
     if (d.isWindDevice) return Icons.air;
     if (d.isNavigationDevice) return Icons.satellite_alt;
     final fn = d.deviceFunction ?? 0;
@@ -360,6 +367,7 @@ class _N2kDeviceCard extends StatelessWidget {
   static Color _colorForDevice(N2kDeviceInfo d, ColorScheme cs) {
     if (d.isBleGatewayDevice) return cs.primary;
     if (d.isTemperatureDevice) return Colors.orange.shade700;
+    if (d.isFluidLevelDevice) return Colors.blue.shade700;
     if (d.isWindDevice) return Colors.blue.shade600;
     if (d.isNavigationDevice) return Colors.green.shade700;
     return cs.secondary;
@@ -374,6 +382,8 @@ class _N2kDeviceCard extends StatelessWidget {
         return 'Navigation';
       case 'temperature':
         return 'Temperature';
+      case 'fluid':
+        return 'Fluid level';
       default:
         final fn = d.deviceFunction;
         if (fn != null) return 'fn $fn';
