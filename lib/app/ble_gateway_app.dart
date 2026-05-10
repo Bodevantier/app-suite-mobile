@@ -9,7 +9,6 @@ import '../pages/ble_monitor_page.dart';
 import '../pages/n2k_device_detail_page.dart';
 import '../pages/navigation_data_page.dart';
 import '../pages/node_settings_page.dart';
-import '../pages/splash_screen.dart';
 import '../pages/temperature_data_page.dart';
 import '../pages/fluid_level_data_page.dart';
 import '../pages/welcome_page.dart';
@@ -80,17 +79,8 @@ class RootPage extends StatefulWidget {
 }
 
 class _RootPageState extends State<RootPage> {
-  bool _splashDone = false;
-
   @override
   Widget build(BuildContext context) {
-    if (!_splashDone) {
-      return SplashScreen(
-        onFinished: () {
-          if (mounted) setState(() => _splashDone = true);
-        },
-      );
-    }
     return AnimatedBuilder(
       animation: widget.dependencies.appSetupController,
       builder: (context, _) {
