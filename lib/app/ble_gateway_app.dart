@@ -319,6 +319,8 @@ class _AppHomePageState extends State<AppHomePage> {
                                                 device: device,
                                                 telemetryController: dependencies
                                                     .telemetryController,
+                                                settingsService:
+                                                    dependencies.nodeSettings,
                                               ),
                                             ),
                                           );
@@ -534,12 +536,31 @@ class _HomeDeviceCardState extends State<_HomeDeviceCard>
 
   bool _isAlarmActive() {
     if (!widget.isLive) return false;
-    if (!widget.device.isFluidLevelDevice) return false;
     final settings = widget.settingsService?.forDevice(widget.device);
-    if (settings == null || !settings.lowLevelAlarmEnabled) return false;
-    final level = widget.telemetryController?.telemetry.fluidLevelPct;
-    if (level == null) return false;
-    return level <= settings.lowLevelAlarmPct;
+
+    // Fluid level — low alarm.
+    if (widget.device.isFluidLevelDevice) {
+      if (settings == null || !settings.lowLevelAlarmEnabled) return false;
+      final level = widget.telemetryController?.telemetry.fluidLevelPct;
+      if (level == null) return false;
+      return level <= settings.lowLevelAlarmPct;
+    }
+
+    // Temperature — high or low alarm.
+    if (widget.device.isTemperatureDevice) {
+      if (settings == null) return false;
+      final tempC = widget.telemetryController?.telemetry.temperatureC;
+      if (tempC == null) return false;
+      if (settings.highTempAlarmEnabled && tempC >= settings.highTempAlarmC) {
+        return true;
+      }
+      if (settings.lowTempAlarmEnabled && tempC <= settings.lowTempAlarmC) {
+        return true;
+      }
+      return false;
+    }
+
+    return false;
   }
 
   @override

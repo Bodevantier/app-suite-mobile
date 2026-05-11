@@ -15,6 +15,10 @@ class NodeSettings {
     this.customCapacityL,
     this.lowLevelAlarmEnabled = false,
     this.lowLevelAlarmPct = 10,
+    this.highTempAlarmEnabled = false,
+    this.highTempAlarmC = 35.0,
+    this.lowTempAlarmEnabled = false,
+    this.lowTempAlarmC = 5.0,
     this.notes,
   });
 
@@ -36,6 +40,18 @@ class NodeSettings {
   /// Threshold percent (0–100) for the low-level alarm.
   final double lowLevelAlarmPct;
 
+  /// When true, a banner is shown when temperature rises above [highTempAlarmC].
+  final bool highTempAlarmEnabled;
+
+  /// High-temperature threshold in °C.
+  final double highTempAlarmC;
+
+  /// When true, a banner is shown when temperature drops below [lowTempAlarmC].
+  final bool lowTempAlarmEnabled;
+
+  /// Low-temperature threshold in °C.
+  final double lowTempAlarmC;
+
   /// Free-text notes attached to the device (e.g. "starboard locker").
   final String? notes;
 
@@ -45,6 +61,8 @@ class NodeSettings {
       (customFluidTypeLabel == null || customFluidTypeLabel!.trim().isEmpty) &&
       customCapacityL == null &&
       !lowLevelAlarmEnabled &&
+      !highTempAlarmEnabled &&
+      !lowTempAlarmEnabled &&
       (notes == null || notes!.trim().isEmpty);
 
   NodeSettings copyWith({
@@ -56,6 +74,10 @@ class NodeSettings {
     bool clearCustomCapacityL = false,
     bool? lowLevelAlarmEnabled,
     double? lowLevelAlarmPct,
+    bool? highTempAlarmEnabled,
+    double? highTempAlarmC,
+    bool? lowTempAlarmEnabled,
+    double? lowTempAlarmC,
     String? notes,
     bool clearNotes = false,
   }) {
@@ -69,6 +91,10 @@ class NodeSettings {
           : (customCapacityL ?? this.customCapacityL),
       lowLevelAlarmEnabled: lowLevelAlarmEnabled ?? this.lowLevelAlarmEnabled,
       lowLevelAlarmPct: lowLevelAlarmPct ?? this.lowLevelAlarmPct,
+      highTempAlarmEnabled: highTempAlarmEnabled ?? this.highTempAlarmEnabled,
+      highTempAlarmC: highTempAlarmC ?? this.highTempAlarmC,
+      lowTempAlarmEnabled: lowTempAlarmEnabled ?? this.lowTempAlarmEnabled,
+      lowTempAlarmC: lowTempAlarmC ?? this.lowTempAlarmC,
       notes: clearNotes ? null : (notes ?? this.notes),
     );
   }
@@ -80,6 +106,10 @@ class NodeSettings {
         if (customCapacityL != null) 'customCapacityL': customCapacityL,
         'lowLevelAlarmEnabled': lowLevelAlarmEnabled,
         'lowLevelAlarmPct': lowLevelAlarmPct,
+        'highTempAlarmEnabled': highTempAlarmEnabled,
+        'highTempAlarmC': highTempAlarmC,
+        'lowTempAlarmEnabled': lowTempAlarmEnabled,
+        'lowTempAlarmC': lowTempAlarmC,
         if (notes != null) 'notes': notes,
       };
 
@@ -96,6 +126,10 @@ class NodeSettings {
       customCapacityL: readDouble(json['customCapacityL']),
       lowLevelAlarmEnabled: json['lowLevelAlarmEnabled'] == true,
       lowLevelAlarmPct: readDouble(json['lowLevelAlarmPct']) ?? 10,
+      highTempAlarmEnabled: json['highTempAlarmEnabled'] == true,
+      highTempAlarmC: readDouble(json['highTempAlarmC']) ?? 35.0,
+      lowTempAlarmEnabled: json['lowTempAlarmEnabled'] == true,
+      lowTempAlarmC: readDouble(json['lowTempAlarmC']) ?? 5.0,
       notes: json['notes'] as String?,
     );
   }

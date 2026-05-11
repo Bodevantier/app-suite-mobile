@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 import '../ble/controllers/ble_gateway_controller.dart';
 import '../ble/services/auto_connect_service.dart';
@@ -33,6 +34,33 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
         unawaited(widget.controller.startScan());
       }
     });
+  }
+
+  void _showDeviceSheet(ScanResult result) {
+    final ad = result.advertisementData;
+    final name = result.device.platformName.isNotEmpty
+        ? result.device.platformName
+        : (ad.advName.isNotEmpty ? ad.advName : 'Unknown Device');
+    final id = result.device.remoteId.str;
+    final isThisConnected = widget.controller.connectedDevice?.remoteId.str == id;
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => _DeviceInfoSheet(
+        name: name,
+        id: id,
+        rssi: result.rssi,
+        txPower: ad.txPowerLevel,
+        connectable: ad.connectable,
+        serviceUuids: ad.serviceUuids.map((g) => g.str128).toList(),
+        manufacturerData: ad.manufacturerData,
+        isConnected: isThisConnected,
+      ),
+    );
   }
 
   Future<void> _connect(dynamic scanResult) async {
@@ -139,6 +167,7 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
                       isConnecting: controller.isConnecting,
                       onConnect: () => unawaited(_connect(result)),
                       onDisconnect: _disconnect,
+                      onTap: () => _showDeviceSheet(result),
                     ),
                   );
                 }),
@@ -314,13 +343,17 @@ class _SectionHeader extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     return Row(
       children: [
-        Text(
-          'Nearby Bluetooth Devices',
-          style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w700,
-                color: colorScheme.onSurfaceVariant,
-                letterSpacing: 0.5,
-              ),
+        Flexible(
+          child: Text(
+            'Nearby Bluetooth Devices',
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: colorScheme.onSurfaceVariant,
+                  letterSpacing: 0.5,
+                ),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+          ),
         ),
         const SizedBox(width: 8),
         if (isScanning) ...[
@@ -333,12 +366,16 @@ class _SectionHeader extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 6),
-          Text(
-            'Scanning…',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: colorScheme.primary,
-                  fontStyle: FontStyle.italic,
-                ),
+          Flexible(
+            child: Text(
+              'Scanning…',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: colorScheme.primary,
+                    fontStyle: FontStyle.italic,
+                  ),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+            ),
           ),
         ],
         const Spacer(),
@@ -417,6 +454,7 @@ class _GatewayCard extends StatelessWidget {
     required this.isConnecting,
     required this.onConnect,
     required this.onDisconnect,
+    this.onTap,
   });
 
   final String name;
@@ -427,6 +465,7 @@ class _GatewayCard extends StatelessWidget {
   final bool isConnecting;
   final VoidCallback onConnect;
   final VoidCallback onDisconnect;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -438,6 +477,7 @@ class _GatewayCard extends StatelessWidget {
 
     return Card(
       elevation: isConnected ? 1 : 0,
+      clipBehavior: Clip.antiAlias,
       color: isConnected
           ? Colors.green.shade50
           : colorScheme.surfaceContainerLow,
@@ -447,7 +487,9 @@ class _GatewayCard extends StatelessWidget {
             ? BorderSide(color: Colors.green.shade200, width: 1.5)
             : BorderSide.none,
       ),
-      child: Padding(
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         child: Row(
           children: [
@@ -509,13 +551,15 @@ class _GatewayCard extends StatelessWidget {
                     children: [
                       _RssiBars(rssi: rssi),
                       const SizedBox(width: 6),
-                      Text(
-                        '$rssi dBm  ·  $id',
-                        style: textTheme.bodySmall?.copyWith(
-                          color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
-                          fontFamily: 'monospace',
+                      Expanded(
+                        child: Text(
+                          '$rssi dBm  ·  $id',
+                          style: textTheme.bodySmall?.copyWith(
+                            color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+                            fontFamily: 'monospace',
+                          ),
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ),
@@ -541,6 +585,183 @@ class _GatewayCard extends StatelessWidget {
               ),
           ],
         ),
+      ),
+      ),
+    );
+  }
+}
+
+// ─── Device info bottom sheet ────────────────────────────────────────────────
+
+class _DeviceInfoSheet extends StatelessWidget {
+  const _DeviceInfoSheet({
+    required this.name,
+    required this.id,
+    required this.rssi,
+    required this.txPower,
+    required this.connectable,
+    required this.serviceUuids,
+    required this.manufacturerData,
+    required this.isConnected,
+  });
+
+  final String name;
+  final String id;
+  final int rssi;
+  final int? txPower;
+  final bool connectable;
+  final List<String> serviceUuids;
+  final Map<int, List<int>> manufacturerData;
+  final bool isConnected;
+
+  String _signalLabel() {
+    if (rssi >= -60) return 'Excellent';
+    if (rssi >= -70) return 'Good';
+    if (rssi >= -80) return 'Fair';
+    if (rssi >= -90) return 'Weak';
+    return 'Poor';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    final iconColor = isConnected ? Colors.green.shade600 : colorScheme.primary;
+
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Handle bar
+          const SizedBox(height: 12),
+          Container(
+            width: 36,
+            height: 4,
+            decoration: BoxDecoration(
+              color: colorScheme.onSurfaceVariant.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 20),
+          // Icon + name
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              color: iconColor.withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              isConnected
+                  ? Icons.bluetooth_connected_rounded
+                  : Icons.bluetooth_rounded,
+              color: iconColor,
+              size: 28,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Text(
+              name,
+              style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+              textAlign: TextAlign.center,
+            ),
+          ),
+          if (isConnected) ...[            
+            const SizedBox(height: 4),
+            Text(
+              'Connected',
+              style: textTheme.bodySmall?.copyWith(
+                color: Colors.green.shade600,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+          const SizedBox(height: 20),
+          const Divider(height: 1, indent: 24, endIndent: 24),
+          const SizedBox(height: 8),
+          // Info rows
+          _InfoRow(label: 'MAC Address', value: id, monospace: true),
+          _InfoRow(
+            label: 'Signal',
+            value: '${_signalLabel()}  ·  $rssi dBm',
+            trailing: _RssiBars(rssi: rssi),
+          ),
+          if (txPower != null)
+            _InfoRow(label: 'TX Power', value: '$txPower dBm'),
+          _InfoRow(label: 'Connectable', value: connectable ? 'Yes' : 'No'),
+          if (serviceUuids.isNotEmpty)
+            _InfoRow(
+              label: 'Service UUID',
+              value: serviceUuids.first,
+              monospace: true,
+            ),
+          if (manufacturerData.isNotEmpty)
+            _InfoRow(
+              label: 'Manufacturer',
+              value: manufacturerData.keys
+                  .map((k) => '0x${k.toRadixString(16).toUpperCase().padLeft(4, "0")}')
+                  .join(', '),
+              monospace: true,
+            ),
+          const SizedBox(height: 24),
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoRow extends StatelessWidget {
+  const _InfoRow({
+    required this.label,
+    required this.value,
+    this.monospace = false,
+    this.trailing,
+  });
+
+  final String label;
+  final String value;
+  final bool monospace;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 110,
+            child: Text(
+              label,
+              style: textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          if (trailing != null) ...[            
+            trailing!,
+            const SizedBox(width: 8),
+          ],
+          Expanded(
+            child: Text(
+              value,
+              style: textTheme.bodyMedium?.copyWith(
+                fontFamily: monospace ? 'monospace' : null,
+                fontSize: monospace ? 12 : null,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
       ),
     );
   }

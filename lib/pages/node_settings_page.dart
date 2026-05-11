@@ -43,6 +43,11 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
   // settings form. This removes visible drag lag on lower-end devices.
   final ValueNotifier<double> _alarmPct = ValueNotifier<double>(10);
 
+  bool _highTempAlarmEnabled = false;
+  final ValueNotifier<double> _highTempAlarmC = ValueNotifier<double>(35.0);
+  bool _lowTempAlarmEnabled = false;
+  final ValueNotifier<double> _lowTempAlarmC = ValueNotifier<double>(5.0);
+
   @override
   void initState() {
     super.initState();
@@ -55,6 +60,10 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
     _fluidTypeOverride = s.customFluidTypeLabel;
     _alarmEnabled = s.lowLevelAlarmEnabled;
     _alarmPct.value = s.lowLevelAlarmPct;
+    _highTempAlarmEnabled = s.highTempAlarmEnabled;
+    _highTempAlarmC.value = s.highTempAlarmC;
+    _lowTempAlarmEnabled = s.lowTempAlarmEnabled;
+    _lowTempAlarmC.value = s.lowTempAlarmC;
   }
 
   @override
@@ -63,6 +72,8 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
     _capacityController.dispose();
     _notesController.dispose();
     _alarmPct.dispose();
+    _highTempAlarmC.dispose();
+    _lowTempAlarmC.dispose();
     super.dispose();
   }
 
@@ -89,6 +100,10 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
       customCapacityL: capacity,
       lowLevelAlarmEnabled: _alarmEnabled,
       lowLevelAlarmPct: _alarmPct.value,
+      highTempAlarmEnabled: _highTempAlarmEnabled,
+      highTempAlarmC: _highTempAlarmC.value,
+      lowTempAlarmEnabled: _lowTempAlarmEnabled,
+      lowTempAlarmC: _lowTempAlarmC.value,
       notes: notes.isEmpty ? null : notes,
     );
     await widget.settingsService.saveForDevice(widget.device, newSettings);
@@ -129,6 +144,7 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
   @override
   Widget build(BuildContext context) {
     final isFluidLevel = widget.device.isFluidLevelDevice;
+    final isTemperature = widget.device.isTemperatureDevice;
     final cs = Theme.of(context).colorScheme;
 
     return Scaffold(
@@ -245,6 +261,53 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
                   child: _AlarmThresholdSlider(
                     value: _alarmPct,
                     enabled: _alarmEnabled,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+          ],
+
+          // ── Temperature alarms ─────────────────────────────────────────
+          if (isTemperature) ...[
+            _SectionCard(
+              title: 'Temperature alarms',
+              children: [
+                SwitchListTile.adaptive(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('High-temperature warning'),
+                  value: _highTempAlarmEnabled,
+                  onChanged: (v) =>
+                      setState(() => _highTempAlarmEnabled = v),
+                ),
+                Opacity(
+                  opacity: _highTempAlarmEnabled ? 1.0 : 0.5,
+                  child: _TempThresholdSlider(
+                    value: _highTempAlarmC,
+                    enabled: _highTempAlarmEnabled,
+                    min: -10,
+                    max: 100,
+                    label: 'Warn above',
+                    unit: '°C',
+                  ),
+                ),
+                const Divider(height: 20),
+                SwitchListTile.adaptive(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Low-temperature warning'),
+                  value: _lowTempAlarmEnabled,
+                  onChanged: (v) =>
+                      setState(() => _lowTempAlarmEnabled = v),
+                ),
+                Opacity(
+                  opacity: _lowTempAlarmEnabled ? 1.0 : 0.5,
+                  child: _TempThresholdSlider(
+                    value: _lowTempAlarmC,
+                    enabled: _lowTempAlarmEnabled,
+                    min: -10,
+                    max: 100,
+                    label: 'Warn below',
+                    unit: '°C',
                   ),
                 ),
               ],
@@ -388,6 +451,58 @@ class _AlarmThresholdSlider extends StatelessWidget {
               width: 48,
               child: Text(
                 '${clamped.round()} %',
+                textAlign: TextAlign.right,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// Temperature threshold slider — same isolated-ValueNotifier pattern as
+/// [_AlarmThresholdSlider], but for °C with configurable min/max.
+class _TempThresholdSlider extends StatelessWidget {
+  const _TempThresholdSlider({
+    required this.value,
+    required this.enabled,
+    required this.min,
+    required this.max,
+    required this.label,
+    required this.unit,
+  });
+
+  final ValueNotifier<double> value;
+  final bool enabled;
+  final double min;
+  final double max;
+  final String label;
+  final String unit;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<double>(
+      valueListenable: value,
+      builder: (context, v, _) {
+        final clamped = v.clamp(min, max);
+        return Row(
+          children: [
+            Text(label),
+            Expanded(
+              child: Slider(
+                min: min,
+                max: max,
+                divisions: (max - min).round(),
+                label: '${clamped.round()} $unit',
+                value: clamped,
+                onChanged: enabled ? (nv) => value.value = nv : null,
+              ),
+            ),
+            SizedBox(
+              width: 52,
+              child: Text(
+                '${clamped.round()} $unit',
                 textAlign: TextAlign.right,
               ),
             ),
