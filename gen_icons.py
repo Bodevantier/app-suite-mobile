@@ -37,7 +37,7 @@ CONTENT_H = MAX_Y - MIN_Y   # ~423
 
 
 def render_icon(size: int) -> Image.Image:
-    padding = size * 0.06
+    padding = size * 0.15
     drawable = size - 2 * padding
     scale = min(drawable / CONTENT_W, drawable / CONTENT_H)
 
