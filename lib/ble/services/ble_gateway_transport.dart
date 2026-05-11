@@ -92,11 +92,14 @@ class BleGatewayTransportService extends ChangeNotifier {
     // after a scan completes.  onScanResults would clear between scans.
     _scanSub = FlutterBluePlus.scanResults.listen(
       (results) {
-        _devices = results
-            .where(
-              (r) => isBleGatewayCandidate(r, serviceUuid: gatewayServiceUuid),
-            )
-            .toList();
+        _devices = results.where((r) {
+          final name = (r.advertisementData.advName.isNotEmpty
+                  ? r.advertisementData.advName
+                  : r.device.platformName)
+              .trim()
+              .toLowerCase();
+          return name.contains('sdolve');
+        }).toList();
         notifyListeners();
       },
       onError: (Object error) {

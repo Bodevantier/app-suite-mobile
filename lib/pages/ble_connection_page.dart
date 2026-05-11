@@ -345,7 +345,7 @@ class _SectionHeader extends StatelessWidget {
       children: [
         Flexible(
           child: Text(
-            'Nearby Bluetooth Devices',
+            'Nearby Devices',
             style: Theme.of(context).textTheme.titleSmall?.copyWith(
                   fontWeight: FontWeight.w700,
                   color: colorScheme.onSurfaceVariant,
