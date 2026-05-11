@@ -155,11 +155,11 @@ class BleGatewayTransportService extends ChangeNotifier {
       _status = 'Scanning...';
       notifyListeners();
 
-      // Filter by the gateway service UUID which the ESP32 actively advertises.
-      // FBP applies this as a native OS-level filter on Android for efficiency.
-      await FlutterBluePlus.startScan(
-        withServices: [Guid(gatewayServiceUuid)],
-      );
+      // No OS-level service filter: let all devices through so isBleGatewayCandidate
+      // can match by name ("sdolve" prefix) as well as by service UUID.
+      // withServices would silently drop devices that don't include the UUID
+      // in their advertisement packet even if they are valid gateways.
+      await FlutterBluePlus.startScan();
     } catch (error) {
       _status = 'Scan failed: $error';
       notifyListeners();

@@ -73,13 +73,6 @@ class FluidLevelDataPage extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  if (device != null) ...[
-                    _DeviceHeader(
-                      device: device!,
-                      overrideName: settings.customName,
-                    ),
-                    const SizedBox(height: 14),
-                  ],
                   if (showAlarm) ...[
                     _LowLevelBanner(thresholdPct: settings.lowLevelAlarmPct),
                     const SizedBox(height: 12),
@@ -108,50 +101,6 @@ class FluidLevelDataPage extends StatelessWidget {
             );
           },
         ),
-      ),
-    );
-  }
-}
-
-class _DeviceHeader extends StatelessWidget {
-  const _DeviceHeader({required this.device, this.overrideName});
-  final N2kDeviceInfo device;
-  final String? overrideName;
-
-  @override
-  Widget build(BuildContext context) {
-    final hasOverride =
-        overrideName != null && overrideName!.trim().isNotEmpty;
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xffffffff),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xffdfe5ef), width: 1.2),
-      ),
-      child: Column(
-        children: [
-          Text(
-            hasOverride ? overrideName!.trim() : device.displayName,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 16,
-              color: Color(0xff0f172a),
-            ),
-          ),
-          if (hasOverride) ...[
-            const SizedBox(height: 2),
-            Text(
-              'Device: ${device.displayName}',
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 11,
-                color: Color(0xff64748b),
-              ),
-            ),
-          ],
-        ],
       ),
     );
   }

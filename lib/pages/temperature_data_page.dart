@@ -44,10 +44,6 @@ class TemperatureDataPage extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  if (device != null) ...[
-                    _DeviceHeader(device: device!),
-                    const SizedBox(height: 14),
-                  ],
                   Expanded(
                     child: _TemperatureCard(
                       temperatureC: telemetry.temperatureC,
@@ -67,32 +63,6 @@ class TemperatureDataPage extends StatelessWidget {
               ),
             );
           },
-        ),
-      ),
-    );
-  }
-}
-
-class _DeviceHeader extends StatelessWidget {
-  const _DeviceHeader({required this.device});
-  final N2kDeviceInfo device;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xffffffff),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xffdfe5ef), width: 1.2),
-      ),
-      child: Text(
-        device.displayName,
-        textAlign: TextAlign.center,
-        style: const TextStyle(
-          fontWeight: FontWeight.w700,
-          fontSize: 16,
-          color: Color(0xff0f172a),
         ),
       ),
     );
