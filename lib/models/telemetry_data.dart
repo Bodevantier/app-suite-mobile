@@ -19,6 +19,12 @@ class TelemetryData {
     this.fluidType,
     this.fluidInstance,
     this.fluidCapacityL,
+    this.magneticVariationDeg,
+    this.hdop,
+    this.vdop,
+    this.gnssAltitudeM,
+    this.gnssSatellites,
+    this.gnssFixType,
     this.unknownPgns,
     this.model,
     this.deviceId,
@@ -57,6 +63,22 @@ class TelemetryData {
 
   /// Tank capacity in litres from PGN 127505. Null when not provided.
   final double? fluidCapacityL;
+
+  /// Magnetic variation in degrees (+ = East) from PGN 127258.
+  final double? magneticVariationDeg;
+
+  /// Horizontal / vertical dilution of precision from PGN 129539.
+  final double? hdop;
+  final double? vdop;
+
+  /// Altitude in metres from PGN 129029 (fast-packet, reassembled).
+  final double? gnssAltitudeM;
+
+  /// Number of tracked satellites from PGN 129029.
+  final int? gnssSatellites;
+
+  /// Fix method string from PGN 129029 (e.g. "GNSS", "DGNSS", "RTK Fixed").
+  final String? gnssFixType;
 
   final int? unknownPgns;
   final String? model;
@@ -138,6 +160,12 @@ class TelemetryData {
     String? fluidType,
     int? fluidInstance,
     double? fluidCapacityL,
+    double? magneticVariationDeg,
+    double? hdop,
+    double? vdop,
+    double? gnssAltitudeM,
+    int? gnssSatellites,
+    String? gnssFixType,
     int? unknownPgns,
     String? model,
     int? deviceId,
@@ -162,6 +190,12 @@ class TelemetryData {
       fluidType: fluidType ?? this.fluidType,
       fluidInstance: fluidInstance ?? this.fluidInstance,
       fluidCapacityL: fluidCapacityL ?? this.fluidCapacityL,
+      magneticVariationDeg: magneticVariationDeg ?? this.magneticVariationDeg,
+      hdop: hdop ?? this.hdop,
+      vdop: vdop ?? this.vdop,
+      gnssAltitudeM: gnssAltitudeM ?? this.gnssAltitudeM,
+      gnssSatellites: gnssSatellites ?? this.gnssSatellites,
+      gnssFixType: gnssFixType ?? this.gnssFixType,
       unknownPgns: unknownPgns ?? this.unknownPgns,
       model: model ?? this.model,
       deviceId: deviceId ?? this.deviceId,

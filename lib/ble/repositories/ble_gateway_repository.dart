@@ -231,12 +231,28 @@ class BleGatewayRepository extends ChangeNotifier {
       '[${_ts()}] [REPO] _applySnapshot: id=$_currentRequestId complete=${snapshot.snapshotComplete} deviceCount=${dedupedDevices.length} expected=${snapshot.snapshotExpected}',
     );
 
-    // Commit whenever we have at least one device – whether or not the
-    // snapshot is marked complete.  The STM32 may deliver a partial snapshot
+    // Commit whenever we have at least one device, whether or not the snapshot
+    // is marked complete.  The STM32 may deliver a partial snapshot
     // (complete=0) when the SPI queue was previously undersized; we still want
     // to show whatever devices we have rather than showing stale cached data.
     if (dedupedDevices.isNotEmpty) {
-      _devices = dedupedDevices;
+      if (snapshot.snapshotComplete) {
+        // Full snapshot received: replace the device list entirely.
+        _devices = dedupedDevices;
+      } else {
+        // Snapshot is still building (arriving line-by-line).  Overlay the
+        // newly-received entries on top of the existing list so that devices
+        // already classified in the previous snapshot (in particular the
+        // gateway device with category='gateway') are not temporarily lost
+        // while the new snapshot is only partially committed.  This prevents
+        // the gateway from briefly appearing as an unclassified 'unknown'
+        // entry in the binary merge and flashing as a phantom 4th card.
+        final bySource = <int, N2kDeviceInfo>{
+          for (final d in _devices) d.src: d,
+          for (final d in dedupedDevices) d.src: d,
+        };
+        _devices = List<N2kDeviceInfo>.unmodifiable(bySource.values.toList());
+      }
       _lastSnapshotAt = DateTime.now().toUtc();
       _buildingSnapshot = _latestSnapshot;
       for (final d in dedupedDevices) {

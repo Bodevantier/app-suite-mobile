@@ -41,7 +41,7 @@ class NavigationDataPage extends StatelessWidget {
           animation: telemetryController,
           builder: (context, _) {
             final telemetry = telemetryController.telemetry;
-            return Padding(
+            return SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -56,6 +56,16 @@ class NavigationDataPage extends StatelessWidget {
                   _PositionCard(
                     latitude: telemetry.latitude,
                     longitude: telemetry.longitude,
+                  ),
+                  const SizedBox(height: 14),
+                  // GPS signal quality card
+                  _GpsSignalCard(
+                    hdop: telemetry.hdop,
+                    vdop: telemetry.vdop,
+                    magneticVariationDeg: telemetry.magneticVariationDeg,
+                    gnssAltitudeM: telemetry.gnssAltitudeM,
+                    gnssSatellites: telemetry.gnssSatellites,
+                    gnssFixType: telemetry.gnssFixType,
                   ),
                   if (primaryActionLabel != null) ...[
                     const SizedBox(height: 16),
@@ -101,15 +111,6 @@ class _CompassCard extends StatelessWidget {
       padding: const EdgeInsets.all(20),
       child: Column(
         children: [
-          const Text(
-            'Course & Speed',
-            style: TextStyle(
-              fontWeight: FontWeight.w800,
-              fontSize: 18,
-              color: Color(0xff111827),
-            ),
-          ),
-          const SizedBox(height: 20),
           _CompassRose(cogDeg: cogDeg),
           const SizedBox(height: 20),
           Row(
@@ -422,6 +423,144 @@ class _DataCell extends StatelessWidget {
           style: const TextStyle(
             fontSize: 28,
             fontWeight: FontWeight.w800,
+            color: Color(0xff111827),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ── GPS Signal card ──────────────────────────────────────────────────────────
+
+class _GpsSignalCard extends StatelessWidget {
+  const _GpsSignalCard({
+    this.hdop,
+    this.vdop,
+    this.magneticVariationDeg,
+    this.gnssAltitudeM,
+    this.gnssSatellites,
+    this.gnssFixType,
+  });
+
+  final double? hdop;
+  final double? vdop;
+  final double? magneticVariationDeg;
+  final double? gnssAltitudeM;
+  final int? gnssSatellites;
+  final String? gnssFixType;
+
+  String _dop(double? v) => v != null ? v.toStringAsFixed(2) : '--';
+
+  String _alt(double? v) => v != null ? '${v.toStringAsFixed(1)} m' : '--';
+
+  String _variation(double? v) {
+    if (v == null) return '--';
+    final sign = v >= 0 ? '+' : '';
+    final dir = v >= 0 ? 'E' : 'W';
+    return '$sign${v.toStringAsFixed(1)}° $dir';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xffffffff),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xffdfe5ef), width: 1.2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.satellite_alt_outlined,
+                  size: 18, color: Color(0xff6b7280)),
+              const SizedBox(width: 6),
+              const Text(
+                'GPS Signal',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
+                  color: Color(0xff374151),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: _GpsRow(
+                  label: 'Fix',
+                  value: gnssFixType ?? '--',
+                ),
+              ),
+              Expanded(
+                child: _GpsRow(
+                  label: 'Satellites',
+                  value: gnssSatellites != null ? '$gnssSatellites' : '--',
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(child: _GpsRow(label: 'HDOP', value: _dop(hdop))),
+              Expanded(child: _GpsRow(label: 'VDOP', value: _dop(vdop))),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(child: _GpsRow(label: 'Altitude', value: _alt(gnssAltitudeM))),
+              Expanded(
+                child: _GpsRow(
+                  label: 'Variation',
+                  value: _variation(magneticVariationDeg),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _GpsRow extends StatelessWidget {
+  const _GpsRow({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 12,
+            color: Color(0xff6b7280),
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
             color: Color(0xff111827),
           ),
         ),

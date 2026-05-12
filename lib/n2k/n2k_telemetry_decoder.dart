@@ -1,7 +1,9 @@
 import 'dart:math' as math;
 
 import '../models/telemetry_data.dart';
+import 'models/n2k_fast_packet_message.dart';
 import 'models/n2k_frame.dart';
+import 'n2k_fast_packet_reassembler.dart';
 
 class N2kTelemetryDecoder {
   static const int pgnWind = 130306;
@@ -12,6 +14,9 @@ class N2kTelemetryDecoder {
   static const int pgnTemperatureExt = 130316;
   static const int pgnTemperature = 130312;
   static const int pgnFluidLevel = 127505;
+  static const int pgnMagneticVariation = 127258;
+  static const int pgnGnssDop = 129539;
+  static const int pgnGnssPositionData = 129029;
 
   static const List<String> _fluidTypeLabels = <String>[
     'Fuel',         // 0
@@ -22,6 +27,21 @@ class N2kTelemetryDecoder {
     'Black water',  // 5
     'Fuel gasoline',// 6
   ];
+
+  // PGN 129029 fix method field (byte 31, high nibble).
+  static const List<String?> _fixMethodLabels = <String?>[
+    'No GNSS',      // 0
+    'GNSS',         // 1
+    'DGNSS',        // 2
+    'Precise GNSS', // 3
+    'RTK Fixed',    // 4
+    'RTK Float',    // 5
+    'DR Mode',      // 6
+    'Manual',       // 7
+    'Simulator',    // 8
+  ];
+
+  final N2kFastPacketReassembler _reassembler = N2kFastPacketReassembler();
 
   TelemetryData decode(Iterable<N2kFrame> frames, {TelemetryData? previous}) {
     var telemetry = previous ?? TelemetryData.empty();
@@ -184,6 +204,45 @@ class N2kTelemetryDecoder {
             );
           }
           break;
+        case pgnMagneticVariation:
+          // PGN 127258 – Magnetic Variation (single-frame, 6 bytes):
+          //   byte 0 = SID
+          //   byte 1 bits 0-3 = variation source, bits 4-7 = reserved
+          //   bytes 2-3 = age of service (uint16 LE, days)
+          //   bytes 4-5 = variation (int16 LE, 0.0001 rad; + = East)
+          if (frame.dlc >= 6) {
+            final varRad = _readInt16Le(data, 4) * 0.0001;
+            telemetry = telemetry.copyWith(
+              magneticVariationDeg: _radToDeg(varRad),
+              updatedAt: DateTime.now(),
+            );
+          }
+          break;
+        case pgnGnssDop:
+          // PGN 129539 – GNSS DOP (single-frame, 8 bytes):
+          //   byte 0 = SID
+          //   byte 1 bits 0-2 = desired mode, bits 3-5 = actual mode
+          //   bytes 2-3 = HDOP (int16 LE, 0.01)
+          //   bytes 4-5 = VDOP (int16 LE, 0.01)
+          //   bytes 6-7 = TDOP (int16 LE, 0.01)
+          if (frame.dlc >= 6) {
+            final hdop = _readInt16Le(data, 2) * 0.01;
+            final vdop = _readInt16Le(data, 4) * 0.01;
+            telemetry = telemetry.copyWith(
+              hdop: hdop,
+              vdop: vdop,
+              updatedAt: DateTime.now(),
+            );
+          }
+          break;
+        case pgnGnssPositionData:
+          // PGN 129029 – GNSS Position Data (fast-packet, 43 bytes reassembled).
+          // Feed each raw CAN frame into the reassembler; decode when complete.
+          final msg = _reassembler.consume(frame);
+          if (msg != null) {
+            telemetry = _decodeGnssPositionData(msg, telemetry);
+          }
+          break;
         case pgnFluidLevel:
           // PGN 127505 – Fluid Level (single-frame, 8 bytes):
           //   byte 0 low nibble  = Tank instance (0–14, 15 = N/A)
@@ -230,6 +289,40 @@ class N2kTelemetryDecoder {
     return telemetry;
   }
 
+  TelemetryData _decodeGnssPositionData(
+      N2kFastPacketMessage msg, TelemetryData telemetry) {
+    // PGN 129029 reassembled payload layout (43 bytes):
+    //   byte 0    : SID
+    //   bytes 1-2 : Date (uint16 LE, days from 1970-01-01)
+    //   bytes 3-6 : Time (uint32 LE, 1e-4 s from midnight)
+    //   bytes 7-14: Latitude  (int64 LE, 1e-16 deg)
+    //   bytes 15-22: Longitude (int64 LE, 1e-16 deg)
+    //   bytes 23-30: Altitude (int64 LE, 1e-6 m)
+    //   byte 31   : GNSS Type (bits 0-3) | Method (bits 4-7)
+    //   byte 32   : Integrity (bits 0-1) | reserved
+    //   byte 33   : Number of SVs
+    //   bytes 34-35: HDOP (int16 LE, 0.01)
+    final payload = msg.payload;
+    if (payload.length < 34) return telemetry;
+
+    final altRaw = _readInt64Le(payload, 23);
+    final gnssTypeByte = payload[31];
+    final method = (gnssTypeByte >> 4) & 0x0f;
+    final svs = payload[33];
+
+    String? fixType;
+    if (method < _fixMethodLabels.length) {
+      fixType = _fixMethodLabels[method];
+    }
+
+    return telemetry.copyWith(
+      gnssAltitudeM: altRaw * 1e-6,
+      gnssSatellites: svs,
+      gnssFixType: fixType,
+      updatedAt: DateTime.now(),
+    );
+  }
+
   double _radToDeg(double radians) {
     return radians * 180.0 / math.pi;
   }
@@ -260,5 +353,12 @@ class N2kTelemetryDecoder {
         (bytes[offset + 2] << 16) |
         (bytes[offset + 3] << 24);
     return value & 0x80000000 != 0 ? value - 0x100000000 : value;
+  }
+
+  int _readInt64Le(List<int> bytes, int offset) {
+    // Dart int is 64-bit on native; bit-combine two 32-bit halves.
+    final lo = _readUint32Le(bytes, offset);
+    final hi = _readUint32Le(bytes, offset + 4);
+    return lo | (hi << 32);
   }
 }

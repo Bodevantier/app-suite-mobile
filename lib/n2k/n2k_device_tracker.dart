@@ -41,6 +41,9 @@ class N2kDeviceTracker {
   final Map<int, N2kDeviceInfo> _devices = <int, N2kDeviceInfo>{};
   // Tracks (pgn << 8 | src) so every unique source is logged once per scan.
   final Set<int> _seenPgns = <int>{};
+  // Sources seen during the current scan; used to prune devices that have
+  // left the bus when the scan completes.
+  final Set<int> _sourcesSeenInScan = <int>{};
 
   DateTime? _scanStartedAt;
   DateTime? _lastDeviceFrameAt;
@@ -62,21 +65,26 @@ class N2kDeviceTracker {
   bool get scanInProgress => _scanStartedAt != null && !_scanComplete;
 
   /// Call this when a DEVICE_LIST_REQUEST is sent to the gateway.
-  /// Clears stale device info and starts the timing window.
+  /// Keeps the existing device map intact so the home page never sees an
+  /// empty list during the scan window.  Devices that do not reappear
+  /// within the scan are pruned when the scan ends.
   void startScan() {
-    // Clear all stale device data so the new scan starts fresh.
-    _devices.clear();
+    // Do NOT clear _devices here.  Preserving existing entries (with their
+    // categories) prevents unclassified 'unknown' devices from flashing
+    // briefly on the home page while AddressClaim frames are still en-route.
+    _sourcesSeenInScan.clear();
     _fastPacketReassembler.reset();
     _seenPgns.clear();
     final now = DateTime.now().toUtc();
     _scanStartedAt = now;
     _lastDeviceFrameAt = null;
     _scanComplete = false;
-    debugPrint('[N2K] scan started');
+    debugPrint('[N2K] scan started (retained ${_devices.length} existing devices)');
   }
 
   void reset() {
     _devices.clear();
+    _sourcesSeenInScan.clear();
     _fastPacketReassembler.reset();
     _seenPgns.clear();
     _scanStartedAt = null;
@@ -98,6 +106,7 @@ class N2kDeviceTracker {
     bool completedThisCall = false;
 
     for (final frame in frames) {
+      _sourcesSeenInScan.add(frame.sourceAddress);
       _ensureDevice(frame.sourceAddress);
       _markOnline(frame.sourceAddress);
 
@@ -150,6 +159,7 @@ class N2kDeviceTracker {
 
       if (sinceStart >= _maxScanDuration) {
         // Hard cap always fires.
+        _pruneUnseenDevices();
         debugPrint('[N2K] scan ended (hard cap ${sinceStart.inMilliseconds}ms) devices=${_devices.length} pgns=${_seenPgns.toList()}');
         _scanComplete = true;
         completedThisCall = true;
@@ -158,6 +168,7 @@ class N2kDeviceTracker {
         // ~10 s spontaneous AddressClaim broadcast cycle has had a chance to run.
         final sinceLastFrame = now.difference(_lastDeviceFrameAt!);
         if (sinceLastFrame >= _quietWindow) {
+          _pruneUnseenDevices();
           debugPrint('[N2K] scan ended (quiet window ${sinceStart.inMilliseconds}ms) devices=${_devices.length} pgns=${_seenPgns.toList()}');
           _scanComplete = true;
           completedThisCall = true;
@@ -166,6 +177,21 @@ class N2kDeviceTracker {
     }
 
     return completedThisCall;
+  }
+
+  /// Removes devices that were not seen at all during the just-completed scan.
+  /// Devices that came and went during the N2K address-conflict window are
+  /// naturally absent and will be dropped here; devices that are still active
+  /// will have sent at least one frame and are retained.
+  void _pruneUnseenDevices() {
+    if (_sourcesSeenInScan.isEmpty) return;
+    final toRemove = _devices.keys
+        .where((src) => !_sourcesSeenInScan.contains(src))
+        .toList();
+    for (final src in toRemove) {
+      debugPrint('[N2K] pruned src=$src (not seen in scan)');
+      _devices.remove(src);
+    }
   }
 
   N2kDeviceInfo _ensureDevice(int source) {

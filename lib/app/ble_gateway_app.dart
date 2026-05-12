@@ -146,6 +146,10 @@ class _AppHomePageState extends State<AppHomePage> {
   Timer? _coalesceTimer;
   DateTime? _lastRebuildAt;
   Listenable? _listenable;
+  // Visual fingerprint of the last queued rebuild. Allows _onSourceChanged to
+  // bail early when only lastSeen timestamps changed — those don't affect
+  // what the home page renders (isLive transitions are caught by _stalenessTicker).
+  String? _lastQueuedVisualState;
 
   @override
   void initState() {
@@ -175,22 +179,45 @@ class _AppHomePageState extends State<AppHomePage> {
     super.dispose();
   }
 
+  /// Compact fingerprint of the fields each home-page card renders.
+  /// Intentionally excludes [lastSeen] — that changes every BLE frame but
+  /// does not affect what the card displays; isLive transitions are caught
+  /// by the 2-second staleness ticker instead.
+  String _deviceFingerprint(N2kDeviceInfo d) =>
+      '${d.src}|${d.displayName}|${d.displayCategory}|'
+      '${d.online ? 1 : 0}';
+
+  String _computeVisualState() {
+    final ctrl = dependencies.bleGatewayController;
+    final auto = dependencies.autoConnectService;
+    final isConnected = ctrl.isConnected;
+    final isConnecting = ctrl.isConnecting ||
+        (auto.isRunning && !isConnected && auto.status.isNotEmpty);
+    final devices =
+        filterSetupVisibleDevices(ctrl.devices).map(_deviceFingerprint).join(',');
+    return '${isConnected ? 1 : 0}|${isConnecting ? 1 : 0}|$devices';
+  }
+
   void _onSourceChanged() {
     if (!mounted) return;
+    // Fast exit: skip rebuild when nothing the home page renders has changed.
+    // Telemetry values (wind/temp readings) are handled by each card's own
+    // AnimatedBuilder; isLive transitions are handled by _stalenessTicker.
+    final newState = _computeVisualState();
+    if (newState == _lastQueuedVisualState) return;
+    _lastQueuedVisualState = newState;
+
     final now = DateTime.now();
     final last = _lastRebuildAt;
     if (last == null || now.difference(last) >= _kRebuildInterval) {
-      // Far enough from the previous frame: rebuild immediately so the user
-      // sees fresh state with no perceptible delay.
+      // Far enough from the previous frame: rebuild immediately.
       _lastRebuildAt = now;
       _coalesceTimer?.cancel();
       _coalesceTimer = null;
       setState(() {});
       return;
     }
-    // Inside the cool-down window: coalesce all further notifications into
-    // a single trailing rebuild so a burst of BLE chunks does not redraw
-    // the list 20+ times per second.
+    // Inside the cool-down window: coalesce into a single trailing rebuild.
     if (_coalesceTimer?.isActive ?? false) return;
     final wait = _kRebuildInterval - now.difference(last);
     _coalesceTimer = Timer(wait, () {
@@ -289,6 +316,7 @@ class _AppHomePageState extends State<AppHomePage> {
                                   final isDeviceLive = isConnected &&
                                       _isDeviceLive(device);
                                   final card = _HomeDeviceCard(
+                                      key: ValueKey<int>(device.src),
                                       device: device,
                                       isLive: isDeviceLive,
                                       settingsService:
@@ -475,6 +503,7 @@ bool _isDeviceLive(N2kDeviceInfo device) {
 
 class _HomeDeviceCard extends StatefulWidget {
   const _HomeDeviceCard({
+    super.key,
     required this.device,
     required this.isLive,
     required this.onTap,
