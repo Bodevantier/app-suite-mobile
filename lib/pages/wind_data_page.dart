@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../controllers/ble_controller.dart';
 import '../models/n2k_device_info.dart';
 import '../services/wind_averages_service.dart';
+import 'wind_settings_page.dart';
 
 /// One angular sample retained for the rolling wind-angle heatmap.
 class _AngleSample {
@@ -41,6 +43,8 @@ enum _SogUnit { kn, kmh, ms }
 class _WindDataPageState extends State<WindDataPage> {
   bool _showWindSpeedInKnots = false;
   bool _showHeatmap = false;
+  static const _kTrailKey = 'wind_trail_enabled';
+  WindSettings _windSettings = const WindSettings();
   _SogUnit _sogUnit = _SogUnit.kn;
   // false = sailing convention (0–180° P/S), true = absolute 0–360°.
   bool _showAngleAsCompass = false;
@@ -50,7 +54,8 @@ class _WindDataPageState extends State<WindDataPage> {
   // Rolling 5-min angle history per mode, sampled at ~1 Hz by [_historyTimer].
   // Kept on the page (not in WindAveragesService) so the heatmap works even
   // when the averages service isn't wired in.
-  static const _historyWindow = Duration(minutes: 5);
+  Duration get _historyWindow =>
+      Duration(minutes: _windSettings.trailWindowMinutes);
   final List<_AngleSample> _apparentHistory = [];
   final List<_AngleSample> _trueHistory = [];
   Timer? _historyTimer;
@@ -61,6 +66,38 @@ class _WindDataPageState extends State<WindDataPage> {
     // Capture a sample every time new telemetry arrives — same rate as the
     // arrow update — instead of a fixed 1-second timer.
     widget.telemetryController.addListener(_captureAngleSample);
+    _loadPreferences();
+  }
+
+  Future<void> _loadPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    final trailOn = prefs.getBool(_kTrailKey) ?? false;
+    final settings = await WindSettings.load();
+    setState(() {
+      _showHeatmap = trailOn;
+      _windSettings = settings;
+    });
+  }
+
+  void _clearTrailData() {
+    setState(() {
+      _apparentHistory.clear();
+      _trueHistory.clear();
+    });
+  }
+
+  void _openSettings() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => WindSettingsPage(
+          settings: _windSettings,
+          onChanged: (updated) {
+            setState(() => _windSettings = updated);
+          },
+          onClearTrail: _clearTrailData,
+        ),
+      ),
+    );
   }
 
   @override
@@ -120,6 +157,8 @@ class _WindDataPageState extends State<WindDataPage> {
     setState(() {
       _showHeatmap = !_showHeatmap;
     });
+    SharedPreferences.getInstance()
+        .then((prefs) => prefs.setBool(_kTrailKey, _showHeatmap));
   }
 
   void _toggleSogUnit() {
@@ -154,6 +193,12 @@ class _WindDataPageState extends State<WindDataPage> {
           ),
         ),
         actions: [
+          // Settings button — always visible.
+          IconButton(
+            icon: const Icon(Icons.tune_rounded, color: Color(0xff64748b)),
+            tooltip: 'Wind settings',
+            onPressed: _openSettings,
+          ),
           // Heatmap toggle is only meaningful on the gauge pages, not on
           // the Averages/Statistics page.
           if (_selectedPage < (widget.hasNavigationDevice ? 2 : 1))
@@ -216,6 +261,8 @@ class _WindDataPageState extends State<WindDataPage> {
                           history: _apparentHistory,
                           showHeatmap: _showHeatmap,
                           onHeatmapToggle: _toggleHeatmap,
+                          trailHalfLifeSec: _windSettings.trailHalfLifeSec,
+                          trailSigmaDeg: _windSettings.trailSigmaDeg,
                         ),
                         if (widget.hasNavigationDevice)
                           _WindModeView(
@@ -234,6 +281,8 @@ class _WindDataPageState extends State<WindDataPage> {
                             history: _trueHistory,
                             showHeatmap: _showHeatmap,
                             onHeatmapToggle: _toggleHeatmap,
+                            trailHalfLifeSec: _windSettings.trailHalfLifeSec,
+                            trailSigmaDeg: _windSettings.trailSigmaDeg,
                           ),
                         if (widget.windAverages != null)
                           _WindAveragesView(
@@ -308,6 +357,8 @@ class _WindModeView extends StatelessWidget {
     this.history = const [],
     this.showHeatmap = false,
     this.onHeatmapToggle,
+    this.trailHalfLifeSec = 60.0,
+    this.trailSigmaDeg = 2.0,
   });
 
   final String title;
@@ -323,6 +374,8 @@ class _WindModeView extends StatelessWidget {
   final List<_AngleSample> history;
   final bool showHeatmap;
   final VoidCallback? onHeatmapToggle;
+  final double trailHalfLifeSec;
+  final double trailSigmaDeg;
 
   @override
   Widget build(BuildContext context) {
@@ -400,6 +453,8 @@ class _WindModeView extends StatelessWidget {
                     history: history,
                     showHeatmap: showHeatmap,
                     onHeatmapToggle: onHeatmapToggle,
+                    trailHalfLifeSec: trailHalfLifeSec,
+                    trailSigmaDeg: trailSigmaDeg,
                   ),
           ),
         ],
@@ -422,6 +477,8 @@ class _WindBoatAngleView extends StatelessWidget {
     this.history = const [],
     this.showHeatmap = false,
     this.onHeatmapToggle,
+    this.trailHalfLifeSec = 60.0,
+    this.trailSigmaDeg = 2.0,
   });
 
   final double? angleDeg;
@@ -436,6 +493,8 @@ class _WindBoatAngleView extends StatelessWidget {
   final List<_AngleSample> history;
   final bool showHeatmap;
   final VoidCallback? onHeatmapToggle;
+  final double trailHalfLifeSec;
+  final double trailSigmaDeg;
 
   Widget _valueText(String value) {
     return Text(
@@ -500,6 +559,8 @@ class _WindBoatAngleView extends StatelessWidget {
                   angleDeg: angleDeg,
                   history: history,
                   showHeatmap: showHeatmap,
+                  trailHalfLifeSec: trailHalfLifeSec,
+                  trailSigmaDeg: trailSigmaDeg,
                 ),
               ),
               // Heatmap toggle has been moved to the page AppBar so it does
@@ -703,11 +764,15 @@ class _AnimatedWindGauge extends StatefulWidget {
     required this.angleDeg,
     this.history = const [],
     this.showHeatmap = false,
+    this.trailHalfLifeSec = 60.0,
+    this.trailSigmaDeg = 2.0,
   });
 
   final double? angleDeg;
   final List<_AngleSample> history;
   final bool showHeatmap;
+  final double trailHalfLifeSec;
+  final double trailSigmaDeg;
 
   @override
   State<_AnimatedWindGauge> createState() => _AnimatedWindGaugeState();
@@ -743,8 +808,8 @@ class _AnimatedWindGaugeState extends State<_AnimatedWindGauge>
     final raw = List<double>.filled(binCount, 0);
 
     final now = DateTime.now();
-    // Exponential recency weighting: half-life of 60 s.
-    const halfLifeSec = 60.0;
+    // Exponential recency weighting — half-life is user-configurable.
+    final halfLifeSec = widget.trailHalfLifeSec;
     final lambda = math.ln2 / halfLifeSec;
     for (final s in widget.history) {
       final ageSec = now.difference(s.timestamp).inMilliseconds / 1000.0;
@@ -756,8 +821,8 @@ class _AnimatedWindGaugeState extends State<_AnimatedWindGauge>
       raw[bin] += w;
     }
 
-    // Circular Gaussian smoothing — σ=8 bins ≈ 4° at 0.5°/bin resolution.
-    const sigma = 8.0;
+    // Circular Gaussian smoothing — sigma is user-configurable (degrees × 2 = bins at 0.5°/bin).
+    final sigma = widget.trailSigmaDeg * 2.0;
     final kernelRadius = (sigma * 3).ceil();
     final kernel = List<double>.generate(
       kernelRadius * 2 + 1,
@@ -846,7 +911,9 @@ class _AnimatedWindGaugeState extends State<_AnimatedWindGauge>
     // not on every animation frame. Use _cachedHistoryLength (not
     // old.history.length) because the parent reuses the same list object.
     if (widget.history.length != _cachedHistoryLength ||
-        widget.showHeatmap != old.showHeatmap) {
+        widget.showHeatmap != old.showHeatmap ||
+        widget.trailHalfLifeSec != old.trailHalfLifeSec ||
+        widget.trailSigmaDeg != old.trailSigmaDeg) {
       _rebuildHeatmap();
       _cachedHistoryLength = widget.history.length;
     }
