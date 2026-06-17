@@ -11,6 +11,7 @@ import '../pages/navigation_data_page.dart';
 import '../pages/node_settings_page.dart';
 import '../pages/temperature_data_page.dart';
 import '../pages/fluid_level_data_page.dart';
+import '../pages/engine_data_page.dart';
 import '../pages/welcome_page.dart';
 import '../pages/wind_data_page.dart';
 import '../widgets/live_activity_indicator.dart';
@@ -359,6 +360,21 @@ class _AppHomePageState extends State<AppHomePage> {
                                           Navigator.of(context).push(
                                             MaterialPageRoute<void>(
                                               builder: (_) => FluidLevelDataPage(
+                                                device: device,
+                                                telemetryController: dependencies
+                                                    .telemetryController,
+                                                settingsService:
+                                                    dependencies.nodeSettings,
+                                              ),
+                                            ),
+                                          );
+                                          return;
+                                        }
+
+                                        if (device.isEngineDevice) {
+                                          Navigator.of(context).push(
+                                            MaterialPageRoute<void>(
+                                              builder: (_) => EngineDataPage(
                                                 device: device,
                                                 telemetryController: dependencies
                                                     .telemetryController,
@@ -764,6 +780,7 @@ class _HomeDeviceCardState extends State<_HomeDeviceCard>
     if (d.isBleGatewayDevice) return Icons.bluetooth;
     if (d.isTemperatureDevice) return Icons.thermostat;
     if (d.isFluidLevelDevice) return Icons.water_drop;
+    if (d.isEngineDevice) return Icons.speed;
     if (d.isWindDevice) return Icons.air;
     if (d.isNavigationDevice) return Icons.satellite_alt;
     return Icons.sensors;
@@ -773,6 +790,7 @@ class _HomeDeviceCardState extends State<_HomeDeviceCard>
     if (d.isBleGatewayDevice) return cs.primary;
     if (d.isTemperatureDevice) return Colors.orange.shade700;
     if (d.isFluidLevelDevice) return Colors.blue.shade700;
+    if (d.isEngineDevice) return Colors.red.shade600;
     if (d.isWindDevice) return Colors.blue.shade600;
     if (d.isNavigationDevice) return Colors.green.shade700;
     return cs.secondary;

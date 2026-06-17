@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../models/n2k_device_info.dart';
 import '../models/node_settings.dart';
+import '../models/engine_settings.dart';
 import '../services/node_settings_service.dart';
 
 /// Per-node configuration screen. Currently tailored for fluid-level
@@ -48,6 +49,23 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
   bool _lowTempAlarmEnabled = false;
   final ValueNotifier<double> _lowTempAlarmC = ValueNotifier<double>(5.0);
 
+  // ── Engine RPM calibration (PGN 127488) ────────────────────────────────
+  // Selectable even alternator pole counts. 6 poles is the most common on
+  // small-craft alternators and matches the firmware default.
+  static const List<int> _alternatorPoleOptions = <int>[
+    2, 4, 6, 8, 10, 12, 14, 16,
+  ];
+  int _alternatorPoles = 6;
+  // ValueNotifier so dragging the pulley-ratio slider only rebuilds the
+  // slider + readout, not the whole settings form.
+  final ValueNotifier<double> _pulleyRatio = ValueNotifier<double>(2.0);
+  // Selectable full-scale values for the RPM dial (kept as multiples of 1000
+  // so the gauge ticks stay clean).
+  static const List<int> _maxRpmOptions = <int>[
+    3000, 4000, 5000, 6000, 7000, 8000,
+  ];
+  int _maxRpm = 6000;
+
   @override
   void initState() {
     super.initState();
@@ -64,6 +82,19 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
     _highTempAlarmC.value = s.highTempAlarmC;
     _lowTempAlarmEnabled = s.lowTempAlarmEnabled;
     _lowTempAlarmC.value = s.lowTempAlarmC;
+
+    // Engine calibration is stored globally (shared across engine sources),
+    // so load it asynchronously and fold it into the form when ready.
+    if (widget.device.isEngineDevice) {
+      EngineSettings.load().then((engine) {
+        if (!mounted) return;
+        setState(() {
+          _alternatorPoles = engine.alternatorPoles;
+          _maxRpm = engine.maxRpm;
+        });
+        _pulleyRatio.value = engine.pulleyRatio;
+      });
+    }
   }
 
   @override
@@ -74,6 +105,7 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
     _alarmPct.dispose();
     _highTempAlarmC.dispose();
     _lowTempAlarmC.dispose();
+    _pulleyRatio.dispose();
     super.dispose();
   }
 
@@ -107,6 +139,16 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
       notes: notes.isEmpty ? null : notes,
     );
     await widget.settingsService.saveForDevice(widget.device, newSettings);
+
+    // Engine calibration lives in its own (global) store.
+    if (widget.device.isEngineDevice) {
+      await EngineSettings(
+        alternatorPoles: _alternatorPoles,
+        pulleyRatio: _pulleyRatio.value,
+        maxRpm: _maxRpm,
+      ).save();
+    }
+
     if (!mounted) return;
     Navigator.of(context).pop();
   }
@@ -145,6 +187,7 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
   Widget build(BuildContext context) {
     final isFluidLevel = widget.device.isFluidLevelDevice;
     final isTemperature = widget.device.isTemperatureDevice;
+    final isEngine = widget.device.isEngineDevice;
     final cs = Theme.of(context).colorScheme;
 
     return Scaffold(
@@ -315,6 +358,149 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
             const SizedBox(height: 12),
           ],
 
+          // ── Engine RPM calibration ─────────────────────────────────────
+          if (isEngine) ...[
+            _SectionCard(
+              title: 'Engine RPM calibration',
+              children: [
+                Text(
+                  'The sensor measures RPM from the alternator W-terminal. '
+                  'Enter your alternator and pulley details so the gauge '
+                  'shows true engine RPM.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: cs.onSurface.withValues(alpha: 0.6),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                DropdownButtonFormField<int>(
+                  initialValue: _alternatorPoles,
+                  decoration: const InputDecoration(
+                    labelText: 'Alternator poles',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: _alternatorPoleOptions
+                      .map(
+                        (p) => DropdownMenuItem<int>(
+                          value: p,
+                          child: Text('$p poles'),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() => _alternatorPoles = value);
+                    }
+                  },
+                ),
+                const SizedBox(height: 16),
+                ValueListenableBuilder<double>(
+                  valueListenable: _pulleyRatio,
+                  builder: (context, ratio, _) {
+                    final ppr = (_alternatorPoles / 2.0) * ratio;
+                    final factor = ppr <= 0
+                        ? 1.0
+                        : EngineSettings.sensorAssumedPulsesPerRev / ppr;
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              'Pulley ratio (engine : alternator)',
+                              style: TextStyle(fontSize: 13),
+                            ),
+                            Text(
+                              '${ratio.toStringAsFixed(2)}:1',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                        Slider(
+                          value: ratio.clamp(0.5, 4.0),
+                          min: 0.5,
+                          max: 4.0,
+                          divisions: 70, // 0.05 steps
+                          label: '${ratio.toStringAsFixed(2)}:1',
+                          onChanged: (v) => _pulleyRatio.value =
+                              double.parse(v.toStringAsFixed(2)),
+                        ),
+                        const SizedBox(height: 4),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            color: cs.surfaceContainerHighest
+                                .withValues(alpha: 0.4),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisAlignment:
+                                MainAxisAlignment.spaceAround,
+                            children: [
+                              _calcReadout(
+                                'Pulses / rev',
+                                ppr.toStringAsFixed(1),
+                                cs,
+                              ),
+                              _calcReadout(
+                                'Display factor',
+                                '×${factor.toStringAsFixed(3)}',
+                                cs,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _SectionCard(
+              title: 'Gauge scale',
+              children: [
+                DropdownButtonFormField<int>(
+                  initialValue: _maxRpm,
+                  decoration: const InputDecoration(
+                    labelText: 'Maximum RPM (dial full-scale)',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: _maxRpmOptions
+                      .map(
+                        (m) => DropdownMenuItem<int>(
+                          value: m,
+                          child: Text('$m RPM'),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() => _maxRpm = value);
+                    }
+                  },
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Sets the end of the RPM dial. Pick a value just above your '
+                  "engine's redline.",
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: cs.onSurface.withValues(alpha: 0.6),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+          ],
+
           // ── Notes ───────────────────────────────────────────────────────
           _SectionCard(
             title: 'Notes',
@@ -341,6 +527,29 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _calcReadout(String label, String value, ColorScheme cs) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            color: cs.onSurface.withValues(alpha: 0.6),
+          ),
+        ),
+      ],
     );
   }
 }

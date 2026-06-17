@@ -15,6 +15,7 @@ class N2kDeviceInfo {
     this.hasLiveWindData = false,
     this.hasLiveTemperatureData = false,
     this.hasLiveFluidLevelData = false,
+    this.hasLiveEngineData = false,
     this.serialNumber,
     this.softwareVersion,
     this.modelVersion,
@@ -43,6 +44,7 @@ class N2kDeviceInfo {
   final bool hasLiveWindData;
   final bool hasLiveTemperatureData;
   final bool hasLiveFluidLevelData;
+  final bool hasLiveEngineData;
   final String? serialNumber;
   final String? softwareVersion;
   final String? modelVersion;
@@ -78,6 +80,16 @@ class N2kDeviceInfo {
     if (hasLiveFluidLevelData) return true;
     if (supportedPgns.any(_fluidLevelPgns.contains)) return true;
     return category == 'fluid';
+  }
+
+  // Generic detection: any device advertising the Engine Parameters PGNs is an
+  // engine source. 127488 = Engine Parameters Rapid Update (RPM, boost, trim),
+  // 127489 = Engine Parameters Dynamic.
+  static const _enginePgns = {127488, 127489};
+  bool get isEngineDevice {
+    if (hasLiveEngineData) return true;
+    if (supportedPgns.any(_enginePgns.contains)) return true;
+    return category == 'engine';
   }
 
   // Generic detection: any device advertising position or COG/SOG PGNs is a
@@ -152,6 +164,7 @@ class N2kDeviceInfo {
   String get displayCategory {
     if (isTemperatureDevice) return 'temperature';
     if (isFluidLevelDevice) return 'fluid';
+    if (isEngineDevice) return 'engine';
     if (isWindDevice) return 'wind';
     if (isNavigationDevice) return 'navigation';
     if (isBleGatewayDevice) return 'gateway';
@@ -178,6 +191,7 @@ class N2kDeviceInfo {
       'hasLiveWindData': hasLiveWindData,
       'hasLiveTemperatureData': hasLiveTemperatureData,
       'hasLiveFluidLevelData': hasLiveFluidLevelData,
+      'hasLiveEngineData': hasLiveEngineData,
       if (serialNumber != null) 'serialNumber': serialNumber,
       if (softwareVersion != null) 'softwareVersion': softwareVersion,
       if (modelVersion != null) 'modelVersion': modelVersion,
@@ -217,6 +231,7 @@ class N2kDeviceInfo {
       hasLiveWindData: _parseBool(json['hasLiveWindData']),
       hasLiveTemperatureData: _parseBool(json['hasLiveTemperatureData']),
       hasLiveFluidLevelData: _parseBool(json['hasLiveFluidLevelData']),
+      hasLiveEngineData: _parseBool(json['hasLiveEngineData']),
       serialNumber: _parseString(json['serialNumber']),
       softwareVersion: _parseString(json['softwareVersion']),
       modelVersion: _parseString(
@@ -255,6 +270,7 @@ class N2kDeviceInfo {
     bool? hasLiveWindData,
     bool? hasLiveTemperatureData,
     bool? hasLiveFluidLevelData,
+    bool? hasLiveEngineData,
     String? serialNumber,
     String? softwareVersion,
     String? modelVersion,
@@ -283,6 +299,7 @@ class N2kDeviceInfo {
       hasLiveWindData: hasLiveWindData ?? this.hasLiveWindData,
       hasLiveTemperatureData: hasLiveTemperatureData ?? this.hasLiveTemperatureData,
       hasLiveFluidLevelData: hasLiveFluidLevelData ?? this.hasLiveFluidLevelData,
+      hasLiveEngineData: hasLiveEngineData ?? this.hasLiveEngineData,
       serialNumber: serialNumber ?? this.serialNumber,
       softwareVersion: softwareVersion ?? this.softwareVersion,
       modelVersion: modelVersion ?? this.modelVersion,
@@ -389,6 +406,7 @@ class N2kDeviceInfo {
         case 'hasLiveWindData':
         case 'hasLiveTemperatureData':
         case 'hasLiveFluidLevelData':
+        case 'hasLiveEngineData':
         case 'softwareVersion':
         case 'hardwareVersion':
         case 'modelVersion':

@@ -17,6 +17,7 @@ class N2kDeviceTracker {
   static const int pgnTemperatureExt = 130316;
   static const int pgnTemperature = 130312;
   static const int pgnFluidLevel = 127505;
+  static const int pgnEngineParamRapid = 127488;
 
   /// Quiet-window: scan considered done when no device-identity frame
   /// arrives for this long after the last one (mirrors Test-16).
@@ -131,6 +132,9 @@ class N2kDeviceTracker {
       if (frame.pgn == pgnFluidLevel) {
         _markLiveFluidLevel(frame.sourceAddress);
       }
+      if (frame.pgn == pgnEngineParamRapid) {
+        _markLiveEngine(frame.sourceAddress);
+      }
       if (frame.pgn == pgnPgnList) {
         _consumePgnList(frame.sourceAddress, frame.data.sublist(0, frame.dlc));
       }
@@ -239,6 +243,18 @@ class N2kDeviceTracker {
     _devices[source] = device.copyWith(
       hasLiveFluidLevelData: true,
       category: 'fluid',
+    );
+  }
+
+  void _markLiveEngine(int source) {
+    final device = _ensureDevice(source);
+    // hasLiveEngineData is sticky and is the authoritative signal for
+    // isEngineDevice — PGN 127488 (Engine Parameters Rapid) is unambiguous,
+    // so this works even when the device reports a non-standard device
+    // class/function in its Address Claim.
+    _devices[source] = device.copyWith(
+      hasLiveEngineData: true,
+      category: 'engine',
     );
   }
 

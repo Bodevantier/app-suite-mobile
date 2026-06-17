@@ -14,6 +14,7 @@ class N2kTelemetryDecoder {
   static const int pgnTemperatureExt = 130316;
   static const int pgnTemperature = 130312;
   static const int pgnFluidLevel = 127505;
+  static const int pgnEngineParamRapid = 127488;
   static const int pgnMagneticVariation = 127258;
   static const int pgnGnssDop = 129539;
   static const int pgnGnssPositionData = 129029;
@@ -281,6 +282,27 @@ class N2kTelemetryDecoder {
               rawText: 'binary:fluidlevel',
               updatedAt: DateTime.now(),
             );
+          }
+          break;
+        case pgnEngineParamRapid:
+          // PGN 127488 – Engine Parameters, Rapid Update (single-frame, 8 bytes):
+          //   byte 0   = Engine instance (0–14, 255 = N/A)
+          //   bytes 1-2 = Engine speed (uint16 LE, 0.25 RPM per LSB)
+          //   bytes 3-4 = Boost pressure (uint16 LE, 100 Pa per LSB)
+          //   byte 5   = Tilt/trim (int8, 1 % per LSB)
+          //   bytes 6-7 = reserved (0xff)
+          if (frame.dlc >= 3) {
+            final instance = data[0];
+            final rpmRaw = _readUint16Le(data, 1);
+            // 0xffff = data not available.
+            if (rpmRaw != 0xffff) {
+              telemetry = telemetry.copyWith(
+                engineRpm: rpmRaw * 0.25,
+                engineInstance: instance,
+                rawText: 'binary:engine',
+                updatedAt: DateTime.now(),
+              );
+            }
           }
           break;
       }

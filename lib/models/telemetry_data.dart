@@ -15,6 +15,8 @@ class TelemetryData {
     this.sogMs,
     this.batteryV,
     this.temperatureC,
+    this.engineRpm,
+    this.engineInstance,
     this.fluidLevelPct,
     this.fluidType,
     this.fluidInstance,
@@ -50,6 +52,14 @@ class TelemetryData {
   final double? sogMs;
   final double? batteryV;
   final double? temperatureC;
+
+  /// Engine speed in RPM as broadcast on PGN 127488 (Engine Parameters,
+  /// Rapid Update). This is the value reported by the sensor before any
+  /// app-side pulses-per-revolution calibration is applied.
+  final double? engineRpm;
+
+  /// Engine instance from PGN 127488 (0–14, 255 = N/A).
+  final int? engineInstance;
 
   /// Fluid (tank) level percentage 0–100 from PGN 127505.
   final double? fluidLevelPct;
@@ -156,6 +166,8 @@ class TelemetryData {
     double? sogMs,
     double? batteryV,
     double? temperatureC,
+    double? engineRpm,
+    int? engineInstance,
     double? fluidLevelPct,
     String? fluidType,
     int? fluidInstance,
@@ -186,6 +198,8 @@ class TelemetryData {
       sogMs: sogMs ?? this.sogMs,
       batteryV: batteryV ?? this.batteryV,
       temperatureC: temperatureC ?? this.temperatureC,
+      engineRpm: engineRpm ?? this.engineRpm,
+      engineInstance: engineInstance ?? this.engineInstance,
       fluidLevelPct: fluidLevelPct ?? this.fluidLevelPct,
       fluidType: fluidType ?? this.fluidType,
       fluidInstance: fluidInstance ?? this.fluidInstance,
