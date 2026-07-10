@@ -582,11 +582,16 @@ class _HomeDeviceCardState extends State<_HomeDeviceCard>
   bool _isAlarmActive() {
     if (!widget.isLive) return false;
     final settings = widget.settingsService?.forDevice(widget.device);
+    // Evaluate alarms against this node's own telemetry — the boat-wide
+    // telemetry holds whichever node transmitted last and would trip the
+    // alarm on the wrong card when two devices share a PGN.
+    final telemetry =
+        widget.telemetryController?.telemetryFor(widget.device.sourceAddress);
 
     // Fluid level — low alarm.
     if (widget.device.isFluidLevelDevice) {
       if (settings == null || !settings.lowLevelAlarmEnabled) return false;
-      final level = widget.telemetryController?.telemetry.fluidLevelPct;
+      final level = telemetry?.fluidLevelPct;
       if (level == null) return false;
       return level <= settings.lowLevelAlarmPct;
     }
@@ -594,7 +599,7 @@ class _HomeDeviceCardState extends State<_HomeDeviceCard>
     // Temperature — high or low alarm.
     if (widget.device.isTemperatureDevice) {
       if (settings == null) return false;
-      final tempC = widget.telemetryController?.telemetry.temperatureC;
+      final tempC = telemetry?.temperatureC;
       if (tempC == null) return false;
       if (settings.highTempAlarmEnabled && tempC >= settings.highTempAlarmC) {
         return true;

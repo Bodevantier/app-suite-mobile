@@ -22,12 +22,21 @@ class BleController extends ChangeNotifier {
   final N2kTelemetryDecoder _telemetryDecoder;
 
   TelemetryData _telemetry = TelemetryData.empty();
+  final Map<int, TelemetryData> _telemetryBySource = <int, TelemetryData>{};
   String _latestUtf8 = '';
   String _latestSource = 'notification';
   bool _isConnected = false;
   bool _isScanning = false;
 
+  /// Boat-wide telemetry: last writer wins across nodes. Use this for pages
+  /// that fuse data from several nodes (wind + heading, navigation).
   TelemetryData get telemetry => _telemetry;
+
+  /// Telemetry as reported by one N2K node only. Use this on per-device
+  /// pages so another node sending the same PGN (a second tank, temperature
+  /// sensor or engine) cannot overwrite what this page shows.
+  TelemetryData telemetryFor(int sourceAddress) =>
+      _telemetryBySource[sourceAddress] ?? TelemetryData.empty();
   String get latestUtf8 => _latestUtf8;
   String get latestSource => _latestSource;
   bool get isConnected => _isConnected;
@@ -44,7 +53,11 @@ class BleController extends ChangeNotifier {
     _latestUtf8 = 'binary:${packet.frames.length}';
     _latestSource = source;
     final scanCompletedNow = _deviceTracker.consumeFrames(packet.frames);
-    _telemetry = _telemetryDecoder.decode(packet.frames, previous: _telemetry);
+    _telemetry = _telemetryDecoder.decode(
+      packet.frames,
+      previous: _telemetry,
+      bySource: _telemetryBySource,
+    );
     if (scanCompletedNow) {
       notifyListeners(); // extra notify so scan-complete UI updates immediately
     }
@@ -91,6 +104,7 @@ class BleController extends ChangeNotifier {
 
   void reset() {
     _telemetry = TelemetryData.empty();
+    _telemetryBySource.clear();
     _deviceTracker.reset();
     _latestUtf8 = '';
     _latestSource = 'notification';
@@ -106,6 +120,7 @@ class BleController extends ChangeNotifier {
 
   /// Forget a single tracked device by N2K source address.
   void forgetDevice(int source) {
+    _telemetryBySource.remove(source);
     if (_deviceTracker.forgetDevice(source)) {
       notifyListeners();
     }

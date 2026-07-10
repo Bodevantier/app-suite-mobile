@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../controllers/ble_controller.dart';
 import '../models/n2k_device_info.dart';
 import '../models/node_settings.dart';
+import '../models/telemetry_data.dart';
 import '../services/node_settings_service.dart';
 import 'node_settings_page.dart';
 
@@ -68,8 +69,18 @@ class _TemperatureDataPageState extends State<TemperatureDataPage> {
     super.dispose();
   }
 
+  /// Telemetry scoped to this page's node when one is given, so a second
+  /// temperature sensor on the bus cannot mix its readings into this view
+  /// or its history chart.
+  TelemetryData _telemetry() {
+    final device = widget.device;
+    return device != null
+        ? widget.telemetryController.telemetryFor(device.sourceAddress)
+        : widget.telemetryController.telemetry;
+  }
+
   void _captureSample() {
-    final t = widget.telemetryController.telemetry;
+    final t = _telemetry();
     if (t.temperatureC == null) return;
     final now = DateTime.now();
     final cutoff = now.subtract(_historyWindow);
@@ -126,7 +137,7 @@ void _openSettings() {
             if (widget.settingsService != null) widget.settingsService!,
           ]),
           builder: (context, _) {
-            final telemetry = widget.telemetryController.telemetry;
+            final telemetry = _telemetry();
             final settings = (widget.device != null &&
                     widget.settingsService != null)
                 ? widget.settingsService!.forDevice(widget.device!)

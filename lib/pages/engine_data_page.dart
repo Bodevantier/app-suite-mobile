@@ -116,7 +116,12 @@ class _EngineDataPageState extends State<EngineDataPage> {
           builder: (context, _) {
             // Cheap: pull any newly-saved calibration each rebuild.
             _refreshSettings();
-            final telemetry = widget.telemetryController.telemetry;
+            // Read this node's own telemetry so a second engine on the bus
+            // cannot drive this gauge.
+            final device = widget.device;
+            final telemetry = device != null
+                ? widget.telemetryController.telemetryFor(device.sourceAddress)
+                : widget.telemetryController.telemetry;
             final calibrated = _settings.calibrate(telemetry.engineRpm);
             return Padding(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),

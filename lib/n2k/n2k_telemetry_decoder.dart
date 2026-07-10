@@ -20,63 +20,128 @@ class N2kTelemetryDecoder {
   static const int pgnGnssPositionData = 129029;
 
   static const List<String> _fluidTypeLabels = <String>[
-    'Fuel',         // 0
-    'Water',        // 1
-    'Gray water',   // 2
-    'Live well',    // 3
-    'Oil',          // 4
-    'Black water',  // 5
-    'Fuel gasoline',// 6
+    'Fuel', // 0
+    'Water', // 1
+    'Gray water', // 2
+    'Live well', // 3
+    'Oil', // 4
+    'Black water', // 5
+    'Fuel gasoline', // 6
   ];
 
   // PGN 129029 fix method field (byte 31, high nibble).
   static const List<String?> _fixMethodLabels = <String?>[
-    'No GNSS',      // 0
-    'GNSS',         // 1
-    'DGNSS',        // 2
+    'No GNSS', // 0
+    'GNSS', // 1
+    'DGNSS', // 2
     'Precise GNSS', // 3
-    'RTK Fixed',    // 4
-    'RTK Float',    // 5
-    'DR Mode',      // 6
-    'Manual',       // 7
-    'Simulator',    // 8
+    'RTK Fixed', // 4
+    'RTK Float', // 5
+    'DR Mode', // 6
+    'Manual', // 7
+    'Simulator', // 8
   ];
 
   final N2kFastPacketReassembler _reassembler = N2kFastPacketReassembler();
 
-  TelemetryData decode(Iterable<N2kFrame> frames, {TelemetryData? previous}) {
+  /// Decodes [frames] into an updated boat-wide [TelemetryData]. Across
+  /// nodes the last writer wins, which is correct for single-instance data
+  /// (position, heading, COG/SOG) and for cross-node fusion (wind + heading).
+  ///
+  /// When [bySource] is given, the same frames are additionally folded into
+  /// one [TelemetryData] per N2K source address (updated in place), so a
+  /// per-node page can show only its own node's data — two senders of the
+  /// same PGN (two tanks, two temperature sensors, two engines...) never
+  /// overwrite each other there.
+  TelemetryData decode(
+    Iterable<N2kFrame> frames, {
+    TelemetryData? previous,
+    Map<int, TelemetryData>? bySource,
+  }) {
     var telemetry = previous ?? TelemetryData.empty();
 
     for (final frame in frames) {
-      final data = frame.data;
-      switch (frame.pgn) {
-        case pgnWind:
-          if (frame.dlc >= 6) {
-            // PGN 130306 byte 5 bits 0-2 = Wind Reference:
-            //   0 = True (ground/north referenced, geographic angle)
-            //   1 = Magnetic (geographic-style, magnetic referenced)
-            //   2 = Apparent (boat-referenced, angle from bow)
-            //   3 = True (boat-referenced — angle from bow, like apparent)
-            //   4 = True (water-referenced — also boat-frame, angle from bow)
-            // Codes 2/3/4 are already in the boat frame; codes 0/1 are
-            // geographic and must be rotated by heading to get a TWA.
-            final ref = data[5] & 0x07;
-            final speedMs = _readUint16Le(data, 1) * 0.01;
-            final rawDeg = _radToDeg(_readUint16Le(data, 3) * 0.0001);
-            // Use NMEA 2000 angle as-is and normalize to [0, 360).
-            final angleDeg = rawDeg % 360.0;
-            final isBoatReferenced = (ref == 2) || (ref == 3) || (ref == 4);
-            if (ref == 2) {
+      // Fast-packet PGNs must be fed to the reassembler exactly once per
+      // frame, so reassembly happens here, not inside _applyFrame (which
+      // can run twice per frame).
+      N2kFastPacketMessage? reassembled;
+      if (frame.pgn == pgnGnssPositionData) {
+        reassembled = _reassembler.consume(frame);
+      }
+      telemetry = _applyFrame(frame, telemetry, reassembled);
+      if (bySource != null) {
+        final source = frame.sourceAddress;
+        bySource[source] = _applyFrame(
+          frame,
+          bySource[source] ?? TelemetryData.empty(),
+          reassembled,
+        );
+      }
+    }
+
+    return telemetry;
+  }
+
+  /// Applies a single frame to [telemetry] and returns the updated state.
+  /// Note: geographic wind (ref 0/1) is rotated using the heading already
+  /// stored in [telemetry], so cross-node fusion only happens in the
+  /// combined state — a per-source state simply stores the raw angle.
+  TelemetryData _applyFrame(
+    N2kFrame frame,
+    TelemetryData telemetry,
+    N2kFastPacketMessage? reassembled,
+  ) {
+    final data = frame.data;
+    switch (frame.pgn) {
+      case pgnWind:
+        if (frame.dlc >= 6) {
+          // PGN 130306 byte 5 bits 0-2 = Wind Reference:
+          //   0 = True (ground/north referenced, geographic angle)
+          //   1 = Magnetic (geographic-style, magnetic referenced)
+          //   2 = Apparent (boat-referenced, angle from bow)
+          //   3 = True (boat-referenced — angle from bow, like apparent)
+          //   4 = True (water-referenced — also boat-frame, angle from bow)
+          // Codes 2/3/4 are already in the boat frame; codes 0/1 are
+          // geographic and must be rotated by heading to get a TWA.
+          final ref = data[5] & 0x07;
+          final speedMs = _readUint16Le(data, 1) * 0.01;
+          final rawDeg = _radToDeg(_readUint16Le(data, 3) * 0.0001);
+          // Use NMEA 2000 angle as-is and normalize to [0, 360).
+          final angleDeg = rawDeg % 360.0;
+          final isBoatReferenced = (ref == 2) || (ref == 3) || (ref == 4);
+          if (ref == 2) {
+            telemetry = telemetry.copyWith(
+              apparentWindSpeedMs: speedMs,
+              apparentWindAngleDeg: angleDeg,
+              windQuality: data[5],
+              rawText: 'binary:wind',
+              updatedAt: DateTime.now(),
+            );
+          } else if (isBoatReferenced) {
+            // ref = 3 or 4 — true wind, but already in boat frame (angle
+            // from bow). No heading rotation needed.
+            telemetry = telemetry.copyWith(
+              trueWindSpeedMs: speedMs,
+              trueWindAngleDeg: angleDeg,
+              windQuality: data[5],
+              rawText: 'binary:wind',
+              updatedAt: DateTime.now(),
+            );
+          } else {
+            // ref=0 (True North) or ref=1 (Magnetic): angle is the geographic
+            // wind direction, NOT angle-from-bow. Convert using current heading.
+            final heading = telemetry.headingDeg;
+            if (heading != null) {
+              var twa = (angleDeg - heading) % 360.0;
+              if (twa < 0) twa += 360.0;
               telemetry = telemetry.copyWith(
-                apparentWindSpeedMs: speedMs,
-                apparentWindAngleDeg: angleDeg,
+                trueWindSpeedMs: speedMs,
+                trueWindAngleDeg: twa,
                 windQuality: data[5],
                 rawText: 'binary:wind',
                 updatedAt: DateTime.now(),
               );
-            } else if (isBoatReferenced) {
-              // ref = 3 or 4 — true wind, but already in boat frame (angle
-              // from bow). No heading rotation needed.
+            } else {
               telemetry = telemetry.copyWith(
                 trueWindSpeedMs: speedMs,
                 trueWindAngleDeg: angleDeg,
@@ -84,235 +149,215 @@ class N2kTelemetryDecoder {
                 rawText: 'binary:wind',
                 updatedAt: DateTime.now(),
               );
-            } else {
-              // ref=0 (True North) or ref=1 (Magnetic): angle is the geographic
-              // wind direction, NOT angle-from-bow. Convert using current heading.
-              final heading = telemetry.headingDeg;
-              if (heading != null) {
-                var twa = (angleDeg - heading) % 360.0;
-                if (twa < 0) twa += 360.0;
-                telemetry = telemetry.copyWith(
-                  trueWindSpeedMs: speedMs,
-                  trueWindAngleDeg: twa,
-                  windQuality: data[5],
-                  rawText: 'binary:wind',
-                  updatedAt: DateTime.now(),
-                );
-              } else {
-                telemetry = telemetry.copyWith(
-                  trueWindSpeedMs: speedMs,
-                  trueWindAngleDeg: angleDeg,
-                  windQuality: data[5],
-                  rawText: 'binary:wind',
-                  updatedAt: DateTime.now(),
-                );
-              }
-              // No heading available — keep speed only; convert angle later.
             }
+            // No heading available — keep speed only; convert angle later.
           }
-          break;
-        case pgnHeading:
-          // PGN 127250: byte 0 = SID, bytes 1-2 = heading (uint16 LE, 0.0001 rad),
-          //             bytes 3-4 = deviation, bytes 5-6 = variation,
-          //             byte 7 bits 0-1 = reference (0 = True, 1 = Magnetic,
-          //             2 = Error, 3 = Null/unavailable).
-          // Wind decoding below treats stored headingDeg as TRUE/geographic
-          // when rotating geographic wind into boat frame. Storing magnetic
-          // heading here would silently mis-rotate true wind, so we accept
-          // only ref == 0 (True). A future improvement: combine magnetic
-          // heading with PGN 127258 variation to derive true heading.
-          if (frame.dlc >= 8) {
-            final ref = data[7] & 0x03;
-            if (ref == 0) {
-              telemetry = telemetry.copyWith(
-                headingDeg: _radToDeg(_readUint16Le(data, 1) * 0.0001),
-                rawText: 'binary:heading',
-                updatedAt: DateTime.now(),
-              );
-            }
-          } else if (frame.dlc >= 3) {
-            // Legacy/short frame: assume true heading (best-effort fallback).
+        }
+        break;
+      case pgnHeading:
+        // PGN 127250: byte 0 = SID, bytes 1-2 = heading (uint16 LE, 0.0001 rad),
+        //             bytes 3-4 = deviation, bytes 5-6 = variation,
+        //             byte 7 bits 0-1 = reference (0 = True, 1 = Magnetic,
+        //             2 = Error, 3 = Null/unavailable).
+        // Wind decoding below treats stored headingDeg as TRUE/geographic
+        // when rotating geographic wind into boat frame. Storing magnetic
+        // heading here would silently mis-rotate true wind, so we accept
+        // only ref == 0 (True). A future improvement: combine magnetic
+        // heading with PGN 127258 variation to derive true heading.
+        if (frame.dlc >= 8) {
+          final ref = data[7] & 0x03;
+          if (ref == 0) {
             telemetry = telemetry.copyWith(
               headingDeg: _radToDeg(_readUint16Le(data, 1) * 0.0001),
               rawText: 'binary:heading',
               updatedAt: DateTime.now(),
             );
           }
-          break;
-        case pgnPositionRapid:
-          // PGN 129025: 4 bytes latitude (1e-7 deg), 4 bytes longitude (1e-7 deg)
-          if (frame.dlc >= 8) {
-            final latitude = _readInt32Le(data, 0) / 10000000.0;
-            final longitude = _readInt32Le(data, 4) / 10000000.0;
+        } else if (frame.dlc >= 3) {
+          // Legacy/short frame: assume true heading (best-effort fallback).
+          telemetry = telemetry.copyWith(
+            headingDeg: _radToDeg(_readUint16Le(data, 1) * 0.0001),
+            rawText: 'binary:heading',
+            updatedAt: DateTime.now(),
+          );
+        }
+        break;
+      case pgnPositionRapid:
+        // PGN 129025: 4 bytes latitude (1e-7 deg), 4 bytes longitude (1e-7 deg)
+        if (frame.dlc >= 8) {
+          final latitude = _readInt32Le(data, 0) / 10000000.0;
+          final longitude = _readInt32Le(data, 4) / 10000000.0;
+          telemetry = telemetry.copyWith(
+            latitude: latitude,
+            longitude: longitude,
+            gps:
+                '${latitude.toStringAsFixed(5)},${longitude.toStringAsFixed(5)}',
+            rawText: 'binary:gps',
+            updatedAt: DateTime.now(),
+          );
+        }
+        break;
+      case pgnCOGSOGRapid:
+        // PGN 129026: byte 0 = SID, byte 1 bits 0-1 = ref, bytes 2-3 = COG (1e-4 rad),
+        //             bytes 4-5 = SOG (1e-2 m/s)
+        if (frame.dlc >= 6) {
+          final cogRad = _readUint16Le(data, 2) * 0.0001;
+          final sogMs = _readUint16Le(data, 4) * 0.01;
+          telemetry = telemetry.copyWith(
+            cogDeg: _radToDeg(cogRad),
+            sogMs: sogMs,
+            rawText: 'binary:cogsog',
+            updatedAt: DateTime.now(),
+          );
+        }
+        break;
+      case pgnBattery:
+        if (frame.dlc >= 7) {
+          telemetry = telemetry.copyWith(
+            batteryV: _readUint16Le(data, 1) * 0.01,
+            rawText: 'binary:battery',
+            updatedAt: DateTime.now(),
+          );
+        }
+        break;
+      case pgnTemperatureExt:
+        // PGN 130316: byte 0 = SID, byte 1 = instance, byte 2 = source,
+        //             bytes 3-5 = actual temperature (uint24 LE, 0.001 K),
+        //             bytes 6-7 = set temperature (uint16 LE, 0.1 K, optional).
+        // PGN 130316 is an 8-byte single-frame PGN; require full payload to
+        // avoid acting on truncated frames.
+        if (frame.dlc >= 8) {
+          final tempK = _readUint24Le(data, 3) * 0.001;
+          telemetry = telemetry.copyWith(
+            temperatureC: tempK - 273.15,
+            rawText: 'binary:temperature',
+            updatedAt: DateTime.now(),
+          );
+        }
+        break;
+      case pgnTemperature:
+        // PGN 130312: byte 0 = SID, byte 1 = instance, byte 2 = source,
+        //             bytes 3-4 = actual temperature (uint16 LE, 0.01 K),
+        //             bytes 5-6 = set temperature (uint16 LE, 0.01 K, optional).
+        // 8-byte single-frame PGN; require full payload.
+        if (frame.dlc >= 8) {
+          final tempK = _readUint16Le(data, 3) * 0.01;
+          telemetry = telemetry.copyWith(
+            temperatureC: tempK - 273.15,
+            rawText: 'binary:temperature',
+            updatedAt: DateTime.now(),
+          );
+        }
+        break;
+      case pgnMagneticVariation:
+        // PGN 127258 – Magnetic Variation (single-frame, 6 bytes):
+        //   byte 0 = SID
+        //   byte 1 bits 0-3 = variation source, bits 4-7 = reserved
+        //   bytes 2-3 = age of service (uint16 LE, days)
+        //   bytes 4-5 = variation (int16 LE, 0.0001 rad; + = East)
+        if (frame.dlc >= 6) {
+          final varRad = _readInt16Le(data, 4) * 0.0001;
+          telemetry = telemetry.copyWith(
+            magneticVariationDeg: _radToDeg(varRad),
+            updatedAt: DateTime.now(),
+          );
+        }
+        break;
+      case pgnGnssDop:
+        // PGN 129539 – GNSS DOP (single-frame, 8 bytes):
+        //   byte 0 = SID
+        //   byte 1 bits 0-2 = desired mode, bits 3-5 = actual mode
+        //   bytes 2-3 = HDOP (int16 LE, 0.01)
+        //   bytes 4-5 = VDOP (int16 LE, 0.01)
+        //   bytes 6-7 = TDOP (int16 LE, 0.01)
+        if (frame.dlc >= 6) {
+          final hdop = _readInt16Le(data, 2) * 0.01;
+          final vdop = _readInt16Le(data, 4) * 0.01;
+          telemetry = telemetry.copyWith(
+            hdop: hdop,
+            vdop: vdop,
+            updatedAt: DateTime.now(),
+          );
+        }
+        break;
+      case pgnGnssPositionData:
+        // PGN 129029 – GNSS Position Data (fast-packet, 43 bytes,
+        // reassembled once per frame in decode()).
+        if (reassembled != null) {
+          telemetry = _decodeGnssPositionData(reassembled, telemetry);
+        }
+        break;
+      case pgnFluidLevel:
+        // PGN 127505 – Fluid Level (single-frame, 8 bytes):
+        //   byte 0 low nibble  = Tank instance (0–14, 15 = N/A)
+        //   byte 0 high nibble = Fluid type   (0=Fuel, 1=Water, 2=Gray,
+        //                                       3=Live well, 4=Oil, 5=Black,
+        //                                       6=Fuel gasoline, 14=Error,
+        //                                       15=Unavailable)
+        //   bytes 1-2 = Level (int16 LE, 0.004 % per LSB)
+        //   bytes 3-6 = Capacity (uint32 LE, 0.1 L per LSB)
+        //   byte 7 = reserved (0xff)
+        if (frame.dlc >= 8) {
+          final b0 = data[0];
+          final instance = b0 & 0x0f;
+          final typeCode = (b0 >> 4) & 0x0f;
+          final levelRaw = _readInt16Le(data, 1);
+          final levelPct = levelRaw * 0.004;
+          final capacityRaw = _readUint32Le(data, 3);
+          // 0xFFFFFFFF means "data not available".
+          final double? capacityL = capacityRaw == 0xFFFFFFFF
+              ? null
+              : capacityRaw * 0.1;
+          String? typeLabel;
+          if (typeCode < _fluidTypeLabels.length) {
+            typeLabel = _fluidTypeLabels[typeCode];
+          } else if (typeCode == 14) {
+            typeLabel = 'Error';
+          } else if (typeCode == 15) {
+            typeLabel = null;
+          } else {
+            typeLabel = 'Type $typeCode';
+          }
+          telemetry = telemetry.copyWith(
+            fluidLevelPct: levelPct,
+            fluidType: typeLabel,
+            fluidInstance: instance,
+            fluidCapacityL: capacityL,
+            rawText: 'binary:fluidlevel',
+            updatedAt: DateTime.now(),
+          );
+        }
+        break;
+      case pgnEngineParamRapid:
+        // PGN 127488 – Engine Parameters, Rapid Update (single-frame, 8 bytes):
+        //   byte 0   = Engine instance (0–14, 255 = N/A)
+        //   bytes 1-2 = Engine speed (uint16 LE, 0.25 RPM per LSB)
+        //   bytes 3-4 = Boost pressure (uint16 LE, 100 Pa per LSB)
+        //   byte 5   = Tilt/trim (int8, 1 % per LSB)
+        //   bytes 6-7 = reserved (0xff)
+        if (frame.dlc >= 3) {
+          final instance = data[0];
+          final rpmRaw = _readUint16Le(data, 1);
+          // 0xffff = data not available.
+          if (rpmRaw != 0xffff) {
             telemetry = telemetry.copyWith(
-              latitude: latitude,
-              longitude: longitude,
-              gps: '${latitude.toStringAsFixed(5)},${longitude.toStringAsFixed(5)}',
-              rawText: 'binary:gps',
+              engineRpm: rpmRaw * 0.25,
+              engineInstance: instance,
+              rawText: 'binary:engine',
               updatedAt: DateTime.now(),
             );
           }
-          break;
-        case pgnCOGSOGRapid:
-          // PGN 129026: byte 0 = SID, byte 1 bits 0-1 = ref, bytes 2-3 = COG (1e-4 rad),
-          //             bytes 4-5 = SOG (1e-2 m/s)
-          if (frame.dlc >= 6) {
-            final cogRad = _readUint16Le(data, 2) * 0.0001;
-            final sogMs = _readUint16Le(data, 4) * 0.01;
-            telemetry = telemetry.copyWith(
-              cogDeg: _radToDeg(cogRad),
-              sogMs: sogMs,
-              rawText: 'binary:cogsog',
-              updatedAt: DateTime.now(),
-            );
-          }
-          break;
-        case pgnBattery:
-          if (frame.dlc >= 7) {
-            telemetry = telemetry.copyWith(
-              batteryV: _readUint16Le(data, 1) * 0.01,
-              rawText: 'binary:battery',
-              updatedAt: DateTime.now(),
-            );
-          }
-          break;
-        case pgnTemperatureExt:
-          // PGN 130316: byte 0 = SID, byte 1 = instance, byte 2 = source,
-          //             bytes 3-5 = actual temperature (uint24 LE, 0.001 K),
-          //             bytes 6-7 = set temperature (uint16 LE, 0.1 K, optional).
-          // PGN 130316 is an 8-byte single-frame PGN; require full payload to
-          // avoid acting on truncated frames.
-          if (frame.dlc >= 8) {
-            final tempK = _readUint24Le(data, 3) * 0.001;
-            telemetry = telemetry.copyWith(
-              temperatureC: tempK - 273.15,
-              rawText: 'binary:temperature',
-              updatedAt: DateTime.now(),
-            );
-          }
-          break;
-        case pgnTemperature:
-          // PGN 130312: byte 0 = SID, byte 1 = instance, byte 2 = source,
-          //             bytes 3-4 = actual temperature (uint16 LE, 0.01 K),
-          //             bytes 5-6 = set temperature (uint16 LE, 0.01 K, optional).
-          // 8-byte single-frame PGN; require full payload.
-          if (frame.dlc >= 8) {
-            final tempK = _readUint16Le(data, 3) * 0.01;
-            telemetry = telemetry.copyWith(
-              temperatureC: tempK - 273.15,
-              rawText: 'binary:temperature',
-              updatedAt: DateTime.now(),
-            );
-          }
-          break;
-        case pgnMagneticVariation:
-          // PGN 127258 – Magnetic Variation (single-frame, 6 bytes):
-          //   byte 0 = SID
-          //   byte 1 bits 0-3 = variation source, bits 4-7 = reserved
-          //   bytes 2-3 = age of service (uint16 LE, days)
-          //   bytes 4-5 = variation (int16 LE, 0.0001 rad; + = East)
-          if (frame.dlc >= 6) {
-            final varRad = _readInt16Le(data, 4) * 0.0001;
-            telemetry = telemetry.copyWith(
-              magneticVariationDeg: _radToDeg(varRad),
-              updatedAt: DateTime.now(),
-            );
-          }
-          break;
-        case pgnGnssDop:
-          // PGN 129539 – GNSS DOP (single-frame, 8 bytes):
-          //   byte 0 = SID
-          //   byte 1 bits 0-2 = desired mode, bits 3-5 = actual mode
-          //   bytes 2-3 = HDOP (int16 LE, 0.01)
-          //   bytes 4-5 = VDOP (int16 LE, 0.01)
-          //   bytes 6-7 = TDOP (int16 LE, 0.01)
-          if (frame.dlc >= 6) {
-            final hdop = _readInt16Le(data, 2) * 0.01;
-            final vdop = _readInt16Le(data, 4) * 0.01;
-            telemetry = telemetry.copyWith(
-              hdop: hdop,
-              vdop: vdop,
-              updatedAt: DateTime.now(),
-            );
-          }
-          break;
-        case pgnGnssPositionData:
-          // PGN 129029 – GNSS Position Data (fast-packet, 43 bytes reassembled).
-          // Feed each raw CAN frame into the reassembler; decode when complete.
-          final msg = _reassembler.consume(frame);
-          if (msg != null) {
-            telemetry = _decodeGnssPositionData(msg, telemetry);
-          }
-          break;
-        case pgnFluidLevel:
-          // PGN 127505 – Fluid Level (single-frame, 8 bytes):
-          //   byte 0 low nibble  = Tank instance (0–14, 15 = N/A)
-          //   byte 0 high nibble = Fluid type   (0=Fuel, 1=Water, 2=Gray,
-          //                                       3=Live well, 4=Oil, 5=Black,
-          //                                       6=Fuel gasoline, 14=Error,
-          //                                       15=Unavailable)
-          //   bytes 1-2 = Level (int16 LE, 0.004 % per LSB)
-          //   bytes 3-6 = Capacity (uint32 LE, 0.1 L per LSB)
-          //   byte 7 = reserved (0xff)
-          if (frame.dlc >= 8) {
-            final b0 = data[0];
-            final instance = b0 & 0x0f;
-            final typeCode = (b0 >> 4) & 0x0f;
-            final levelRaw = _readInt16Le(data, 1);
-            final levelPct = levelRaw * 0.004;
-            final capacityRaw = _readUint32Le(data, 3);
-            // 0xFFFFFFFF means "data not available".
-            final double? capacityL =
-                capacityRaw == 0xFFFFFFFF ? null : capacityRaw * 0.1;
-            String? typeLabel;
-            if (typeCode < _fluidTypeLabels.length) {
-              typeLabel = _fluidTypeLabels[typeCode];
-            } else if (typeCode == 14) {
-              typeLabel = 'Error';
-            } else if (typeCode == 15) {
-              typeLabel = null;
-            } else {
-              typeLabel = 'Type $typeCode';
-            }
-            telemetry = telemetry.copyWith(
-              fluidLevelPct: levelPct,
-              fluidType: typeLabel,
-              fluidInstance: instance,
-              fluidCapacityL: capacityL,
-              rawText: 'binary:fluidlevel',
-              updatedAt: DateTime.now(),
-            );
-          }
-          break;
-        case pgnEngineParamRapid:
-          // PGN 127488 – Engine Parameters, Rapid Update (single-frame, 8 bytes):
-          //   byte 0   = Engine instance (0–14, 255 = N/A)
-          //   bytes 1-2 = Engine speed (uint16 LE, 0.25 RPM per LSB)
-          //   bytes 3-4 = Boost pressure (uint16 LE, 100 Pa per LSB)
-          //   byte 5   = Tilt/trim (int8, 1 % per LSB)
-          //   bytes 6-7 = reserved (0xff)
-          if (frame.dlc >= 3) {
-            final instance = data[0];
-            final rpmRaw = _readUint16Le(data, 1);
-            // 0xffff = data not available.
-            if (rpmRaw != 0xffff) {
-              telemetry = telemetry.copyWith(
-                engineRpm: rpmRaw * 0.25,
-                engineInstance: instance,
-                rawText: 'binary:engine',
-                updatedAt: DateTime.now(),
-              );
-            }
-          }
-          break;
-      }
+        }
+        break;
     }
 
     return telemetry;
   }
 
   TelemetryData _decodeGnssPositionData(
-      N2kFastPacketMessage msg, TelemetryData telemetry) {
+    N2kFastPacketMessage msg,
+    TelemetryData telemetry,
+  ) {
     // PGN 129029 reassembled payload layout (43 bytes):
     //   byte 0    : SID
     //   bytes 1-2 : Date (uint16 LE, days from 1970-01-01)
@@ -370,7 +415,8 @@ class N2kTelemetryDecoder {
   }
 
   int _readInt32Le(List<int> bytes, int offset) {
-    final value = bytes[offset] |
+    final value =
+        bytes[offset] |
         (bytes[offset + 1] << 8) |
         (bytes[offset + 2] << 16) |
         (bytes[offset + 3] << 24);

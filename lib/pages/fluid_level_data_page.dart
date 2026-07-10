@@ -60,11 +60,18 @@ class FluidLevelDataPage extends StatelessWidget {
             ?settingsListenable,
           ]),
           builder: (context, _) {
-            final telemetry = telemetryController.telemetry;
+            // With several tank sensors on the bus, the boat-wide telemetry
+            // holds whichever tank transmitted last. This page is opened for
+            // one node, so read only that node's own telemetry.
+            final telemetry = device != null
+                ? telemetryController.telemetryFor(device!.sourceAddress)
+                : telemetryController.telemetry;
             final settings = (device != null && settingsService != null)
                 ? settingsService!.forDevice(device!)
                 : NodeSettings.empty;
             final levelPct = telemetry.fluidLevelPct;
+            final fluidType = telemetry.fluidType;
+            final capacityL = telemetry.fluidCapacityL;
             final showAlarm = settings.lowLevelAlarmEnabled &&
                 levelPct != null &&
                 levelPct <= settings.lowLevelAlarmPct;
@@ -80,10 +87,8 @@ class FluidLevelDataPage extends StatelessWidget {
                   Expanded(
                     child: _FluidLevelCard(
                       levelPct: levelPct,
-                      fluidType: settings.customFluidTypeLabel ??
-                          telemetry.fluidType,
-                      capacityL: settings.customCapacityL ??
-                          telemetry.fluidCapacityL,
+                      fluidType: settings.customFluidTypeLabel ?? fluidType,
+                      capacityL: settings.customCapacityL ?? capacityL,
                     ),
                   ),
                   if (primaryActionLabel != null) ...[
