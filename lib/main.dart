@@ -10,8 +10,36 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   FlutterBluePlus.setLogLevel(LogLevel.none);
+  // Must be called before any other FlutterBluePlus method. Opts into iOS/
+  // macOS CoreBluetooth state restoration (CBCentralManagerOptionRestore
+  // IdentifierKey) so a previously-connected gateway can reconnect — and the
+  // app can be woken in the background for it — after iOS suspends or kills
+  // the app. No effect on Android.
+  await FlutterBluePlus.setOptions(restoreState: true);
   // Start loading dependencies immediately — in parallel with the splash animation.
   runApp(_AppLoader(dependenciesFuture: AppDependencies.standard()));
+}
+
+/// Entry point Android uses to wake the app in the background — process not
+/// running at all, not just backgrounded — after detecting the known
+/// gateway via the system-level BLE scan registered by [BleBackgroundService]
+/// (see MainActivity.kt / BleScanReceiver.kt on the native side).
+///
+/// Deliberately does NOT call runApp(): a widget tree with no attached view
+/// has no vsync/frame pump to drive animations, and the splash screen's
+/// completion depends on one — it would simply never finish, leaving the
+/// app looking stuck once the user opens it. This entry point only needs to
+/// establish the BLE connection; MainActivity destroys this headless engine
+/// before starting its own the moment the user actually opens the app (see
+/// MainActivity.kt), so there is only ever one live GATT connection.
+@pragma('vm:entry-point')
+void backgroundConnectMain() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  FlutterBluePlus.setLogLevel(LogLevel.none);
+  // AppDependencies.standard() already starts AutoConnectService if a
+  // gateway is known — its active Timer/StreamSubscriptions are what keep
+  // this isolate alive and busy afterwards, no explicit hold needed.
+  await AppDependencies.standard();
 }
 
 /// Shows the splash animation while dependencies load in the background.

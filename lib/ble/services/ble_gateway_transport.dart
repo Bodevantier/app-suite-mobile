@@ -72,6 +72,12 @@ class BleGatewayTransportService extends ChangeNotifier {
   bool _initialized = false;
   bool _isConnecting = false;
   String _status = 'Initializing BLE...';
+  // Tracks the native BluetoothGatt teardown fired in the background by
+  // disconnect() (see there for why it isn't awaited up front). A fresh
+  // connect attempt must wait for this to actually finish first — issuing a
+  // new connect() while the old GATT client hasn't finished closing is a
+  // known cause of very slow/duplicate reconnects on Android.
+  Future<void>? _pendingNativeDisconnect;
 
   List<ScanResult> get devices => List.unmodifiable(_devices);
   BluetoothDevice? get connectedDevice => _connectedDevice;
@@ -175,12 +181,43 @@ class BleGatewayTransportService extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> connect(ScanResult result) async {
+  Future<void> connect(ScanResult result) => _connectDevice(result.device);
+
+  /// Connects directly to a previously-known device by its remoteId, with no
+  /// scan step first. Used by [AutoConnectService] so reconnecting (app
+  /// launch/resume, or the gateway coming back into range) takes roughly one
+  /// GATT-connect's worth of time instead of a multi-second scan window.
+  Future<void> connectKnown(String remoteId) =>
+      _connectDevice(BluetoothDevice.fromId(remoteId));
+
+  /// Resolves once any in-flight native GATT teardown from a previous
+  /// [disconnect] call has actually finished (Android is documented to
+  /// sometimes take many seconds here, regardless of what this app does).
+  ///
+  /// [_connectDevice] already awaits this internally, so correctness never
+  /// depends on callers remembering to call it. But callers that themselves
+  /// wrap a connect attempt in a short timeout (e.g. AutoConnectService's
+  /// bounded fast-path) MUST call this first, unbounded, before starting
+  /// that timer — otherwise the timeout can expire while this wait is
+  /// still pending inside _connectDevice, abandoning (but NOT cancelling —
+  /// Dart futures can't be cancelled) that call, which keeps running in the
+  /// background and eventually issues its own connect(), racing whatever
+  /// the caller tries next. That race is what caused connects to
+  /// intermittently succeed and then immediately get cancelled again.
+  Future<void> waitForPendingDisconnect() async {
+    final pending = _pendingNativeDisconnect;
+    if (pending == null) return;
+    _status = 'Finishing previous disconnect...';
+    notifyListeners();
+    await pending;
+    _pendingNativeDisconnect = null;
+  }
+
+  Future<void> _connectDevice(BluetoothDevice device) async {
     if (_isConnecting) return;
     const settleDelay = Duration(milliseconds: 350);
     const retryDelay = Duration(milliseconds: 900);
 
-    final device = result.device;
     final deviceName = device.platformName.isNotEmpty
         ? device.platformName
         : device.remoteId.str;
@@ -189,6 +226,8 @@ class BleGatewayTransportService extends ChangeNotifier {
       _isConnecting = true;
       _status = 'Connecting to $deviceName...';
       notifyListeners();
+
+      await waitForPendingDisconnect();
 
       await _resetBeforeConnect(device);
       await Future<void>.delayed(settleDelay);
@@ -228,16 +267,24 @@ class BleGatewayTransportService extends ChangeNotifier {
   Future<void> disconnect() async {
     final device = _connectedDevice;
     if (device == null) return;
-    try {
-      await _unsubscribe();
-      await _connectionSub?.cancel();
-      _connectionSub = null;
-      await device.disconnect();
-      await _handleDisconnectCleanup(autoStatus: 'Disconnected');
-    } catch (error) {
-      _status = 'Disconnect failed: $error';
-      notifyListeners();
-    }
+    // A user-initiated disconnect should feel instant. Cancel our own local
+    // stream subscriptions (fast, no BLE I/O) and update state right away —
+    // don't wait for Android's own GATT teardown, which is documented to
+    // sometimes take many seconds regardless of what the app does, and skip
+    // explicitly writing CCCD=0 first (unnecessary once the whole link is
+    // being severed, and — now that every characteristic requires
+    // encryption — a write that can itself hang for seconds if the link
+    // needs to renegotiate security). The native teardown is tracked in
+    // _pendingNativeDisconnect so a fresh connect() call waits for it to
+    // actually finish instead of racing it — see _connectDevice.
+    await _connectionSub?.cancel();
+    _connectionSub = null;
+    await _textNotifySub?.cancel();
+    await _binaryNotifySub?.cancel();
+    _textNotifySub = null;
+    _binaryNotifySub = null;
+    await _handleDisconnectCleanup(autoStatus: 'Disconnected');
+    _pendingNativeDisconnect = device.disconnect().catchError((_) {});
   }
 
   Future<void> shutdown() async {
@@ -276,6 +323,12 @@ class BleGatewayTransportService extends ChangeNotifier {
       timeout: const Duration(seconds: 12),
     );
 
+    await _finishConnectedSetup(device);
+  }
+
+  /// Service discovery, characteristic lookup, subscribe, and bonding —
+  /// everything after the link-layer GATT connection exists.
+  Future<void> _finishConnectedSetup(BluetoothDevice device) async {
     final services = await device.discoverServices();
     final gatewayService = _findServiceByUuid(services, gatewayServiceUuid);
     if (gatewayService == null) {
@@ -471,11 +524,20 @@ class BleGatewayTransportService extends ChangeNotifier {
     _binaryNotifySub = null;
     // Only disable the CCCD if the device is still connected; setNotifyValue
     // will fail (and is pointless) if the connection is already gone.
+    // Bounded: CCCD writes are encrypted now, and a write on a link that
+    // needs to renegotiate security can hang for seconds — never let that
+    // block whoever is waiting on this cleanup step.
     final device = _connectedDevice;
     if (device != null && device.isConnected) {
-      try { await _notifyCharacteristic?.setNotifyValue(false); } catch (_) {}
       try {
-        await _binaryNotifyCharacteristic?.setNotifyValue(false);
+        await _notifyCharacteristic
+            ?.setNotifyValue(false)
+            .timeout(const Duration(seconds: 2));
+      } catch (_) {}
+      try {
+        await _binaryNotifyCharacteristic
+            ?.setNotifyValue(false)
+            .timeout(const Duration(seconds: 2));
       } catch (_) {}
     }
   }

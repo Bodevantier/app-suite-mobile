@@ -6,10 +6,39 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
 
+    <!-- Keeps the app process alive (persistent notification) while
+         auto-connect is watching for or connected to the BLE gateway. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Re-registers the background BLE scan after a phone reboot. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Lets the user grant the one exemption that allows the app to start
+         its foreground service (and actually connect) when the OS wakes it
+         for the gateway while the app is fully closed. Without it, a
+         detected gateway only shows a plain notification. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <application
         android:label="SDolve"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <service
+            android:name=".BleForegroundService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="connectedDevice" />
+        <!-- Woken by the OS (not just this app) when the system-level BLE
+             scan registered in BleBackgroundScan sees the known gateway —
+             works even if this app's process isn't running at all. -->
+        <receiver android:name=".BleScanReceiver" android:exported="false" />
+        <!-- Re-registers that scan after a reboot (registrations don't
+             survive the Bluetooth stack resetting). -->
+        <receiver android:name=".BootReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
         <activity
             android:name=".MainActivity"
             android:exported="true"

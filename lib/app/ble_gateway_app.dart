@@ -39,8 +39,16 @@ class _BleGatewayAppState extends State<BleGatewayApp>
 
   void _startAutoConnectIfKnown() {
     final knownId = widget.dependencies.preferences.knownGatewayId;
-    if (knownId != null) {
-      widget.dependencies.autoConnectService.start(knownId);
+    if (knownId == null) return;
+    final auto = widget.dependencies.autoConnectService;
+    // start() is a no-op if already watching this device (e.g. a background
+    // watch kept alive while the app was closed) — retryNow() forces an
+    // immediate attempt in that case instead of waiting for the next
+    // periodic retry.
+    if (auto.isRunning) {
+      auto.retryNow();
+    } else {
+      auto.start(knownId);
     }
   }
 
@@ -55,6 +63,10 @@ class _BleGatewayAppState extends State<BleGatewayApp>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.detached) {
       unawaited(widget.dependencies.bleGatewayController.shutdown());
+    } else if (state == AppLifecycleState.resumed) {
+      // Returning to the app should feel instant — don't wait on whatever
+      // passive reconnect state happens to already be in flight.
+      _startAutoConnectIfKnown();
     }
   }
 

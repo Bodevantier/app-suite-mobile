@@ -235,6 +235,15 @@ class BleGatewayController extends ChangeNotifier {
         unawaited(preferences!.saveForgottenN2kSources(_forgottenSources));
       }
     }
+    await _requestDeviceListSnapshot();
+  }
+
+  /// The actual "ask the gateway for a fresh snapshot" write, shared by the
+  /// user-facing [requestDeviceList] (which also clears the forgotten list)
+  /// and the automatic post-connect trigger in [_handleDependencyChanged]
+  /// (which must NOT clear it — a background reconnect should never
+  /// silently un-forget a device the user swiped away).
+  Future<void> _requestDeviceListSnapshot() async {
     // Start the scan window BEFORE writing the command so any AddressClaim
     // frames already in the BLE notification pipeline are captured, not lost.
     telemetryController?.startDeviceScan();
@@ -311,6 +320,11 @@ class BleGatewayController extends ChangeNotifier {
         // gateway (whose forget state is RAM-only) drops them again. Keeps
         // the user-side forget list authoritative across gateway reboots.
         unawaited(_resyncForgottenSources());
+        // Proactively ask for a fresh device-list snapshot instead of
+        // silently waiting up to ~30s for the gateway's own periodic
+        // broadcast — this is what makes N2K data show up quickly after
+        // connecting, on top of the BLE link itself now being fast.
+        unawaited(_requestDeviceListSnapshot());
       }
     }
     notifyListeners();

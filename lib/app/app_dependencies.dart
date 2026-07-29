@@ -80,6 +80,17 @@ class AppDependencies {
       }
     });
 
+    // Kick off auto-connect right now rather than waiting for BleGatewayApp
+    // to mount after the splash screen — dependency construction happens in
+    // parallel with the splash animation, so starting the connect attempt
+    // here lets that otherwise-idle time double as connect time instead of
+    // only starting once the user is already looking at the home screen.
+    final autoConnectService = AutoConnectService(transport: transport);
+    final knownGatewayId = preferences.knownGatewayId;
+    if (knownGatewayId != null) {
+      autoConnectService.start(knownGatewayId);
+    }
+
     return AppDependencies(
       preferences: preferences,
       appSetupController: AppSetupController(preferences: preferences),
@@ -90,7 +101,7 @@ class AppDependencies {
         telemetryController: telemetryController,
         preferences: preferences,
       ),
-      autoConnectService: AutoConnectService(transport: transport),
+      autoConnectService: autoConnectService,
       windAverages: windAverages,
       nodeSettings: nodeSettings,
     );

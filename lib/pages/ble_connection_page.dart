@@ -5,6 +5,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 import '../ble/controllers/ble_gateway_controller.dart';
 import '../ble/services/auto_connect_service.dart';
+import '../ble/services/ble_background_service.dart';
 import '../services/app_preferences_service.dart';
 
 class BleConnectionPage extends StatefulWidget {
@@ -24,6 +25,10 @@ class BleConnectionPage extends StatefulWidget {
 }
 
 class _BleConnectionPageState extends State<BleConnectionPage> {
+  // Null while loading. False shows the "enable reliable background
+  // reconnect" card below the status card — see _BatteryOptimizationCard.
+  bool? _ignoringBatteryOptimizations;
+
   @override
   void initState() {
     super.initState();
@@ -34,6 +39,19 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
         unawaited(widget.controller.startScan());
       }
     });
+    unawaited(_refreshBatteryOptimizationStatus());
+  }
+
+  Future<void> _refreshBatteryOptimizationStatus() async {
+    final ignoring = await BleBackgroundService.isIgnoringBatteryOptimizations();
+    if (mounted) setState(() => _ignoringBatteryOptimizations = ignoring);
+  }
+
+  Future<void> _requestBackgroundReliability() async {
+    await BleBackgroundService.requestIgnoreBatteryOptimizations();
+    // The system dialog is a separate Activity — re-check once we're back
+    // in the foreground rather than guessing the outcome.
+    if (mounted) unawaited(_refreshBatteryOptimizationStatus());
   }
 
   void _showDeviceSheet(ScanResult result) {
@@ -84,8 +102,27 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
     }
   }
 
-  Future<void> _disconnect() async {
+  /// Used for both "Disconnect" (while connected) and "Cancel" (while
+  /// connecting). Pausing auto-connect FIRST is what makes this stick —
+  /// otherwise the transport's own disconnect notification would trigger
+  /// AutoConnectService to immediately try reconnecting again.
+  Future<void> _disconnectOrCancel() async {
+    widget.autoConnectService.pause();
     await widget.controller.disconnect();
+  }
+
+  /// Manually reconnects to the known gateway without requiring it to
+  /// already be sitting in the current scan results — mirrors how a normal
+  /// Bluetooth settings screen lets you reconnect a known/paired device
+  /// directly instead of making you re-discover it.
+  void _reconnectKnown() {
+    final knownId = widget.preferences.knownGatewayId;
+    if (knownId == null) return;
+    if (widget.autoConnectService.isRunning) {
+      widget.autoConnectService.retryNow();
+    } else {
+      widget.autoConnectService.start(knownId);
+    }
   }
 
   Future<void> _forgetGateway() async {
@@ -107,6 +144,13 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
         final connectedId = controller.connectedDevice?.remoteId.str;
         final knownId = widget.preferences.knownGatewayId;
         final discovered = controller.discoveredDevices;
+        // AutoConnectService can be mid-attempt (adapter wait, scan) before
+        // the transport itself reports isConnecting — match the home page's
+        // definition so the Connecting/Cancel UI shows for the whole window.
+        final isConnecting = controller.isConnecting ||
+            (widget.autoConnectService.isRunning &&
+                !controller.isConnected &&
+                widget.autoConnectService.status.isNotEmpty);
 
         return Scaffold(
           appBar: AppBar(
@@ -131,14 +175,28 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
             children: [
               _StatusCard(
                 isConnected: controller.isConnected,
-                isConnecting: controller.isConnecting,
+                isConnecting: isConnecting,
                 isScanning: controller.isScanning,
                 connectedName: controller.connectedDevice?.platformName,
                 connectedId: connectedId,
+                hasKnownGateway: knownId != null,
                 autoStatus: widget.autoConnectService.status,
-                onDisconnect: controller.isConnected ? _disconnect : null,
+                onDisconnect:
+                    controller.isConnected ? _disconnectOrCancel : null,
+                onCancel: (!controller.isConnected && isConnecting)
+                    ? _disconnectOrCancel
+                    : null,
+                onConnect: (!controller.isConnected &&
+                        !isConnecting &&
+                        knownId != null)
+                    ? _reconnectKnown
+                    : null,
                 onForget: knownId != null ? _forgetGateway : null,
               ),
+              if (knownId != null && _ignoringBatteryOptimizations == false) ...[
+                const SizedBox(height: 12),
+                _BatteryOptimizationCard(onEnable: _requestBackgroundReliability),
+              ],
               const SizedBox(height: 28),
               _SectionHeader(
                 isScanning: controller.isScanning,
@@ -166,7 +224,7 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
                       isKnown: isKnown,
                       isConnecting: controller.isConnecting,
                       onConnect: () => unawaited(_connect(result)),
-                      onDisconnect: _disconnect,
+                      onDisconnect: _disconnectOrCancel,
                       onTap: () => _showDeviceSheet(result),
                     ),
                   );
@@ -188,8 +246,11 @@ class _StatusCard extends StatelessWidget {
     required this.isScanning,
     required this.connectedName,
     required this.connectedId,
+    required this.hasKnownGateway,
     required this.autoStatus,
     required this.onDisconnect,
+    required this.onCancel,
+    required this.onConnect,
     required this.onForget,
   });
 
@@ -198,8 +259,11 @@ class _StatusCard extends StatelessWidget {
   final bool isScanning;
   final String? connectedName;
   final String? connectedId;
+  final bool hasKnownGateway;
   final String autoStatus;
   final VoidCallback? onDisconnect;
+  final VoidCallback? onCancel;
+  final VoidCallback? onConnect;
   final VoidCallback? onForget;
 
   @override
@@ -232,7 +296,9 @@ class _StatusCard extends StatelessWidget {
       title = 'Not Connected';
       detail = autoStatus.isNotEmpty
           ? autoStatus
-          : 'Tap a device below to connect';
+          : hasKnownGateway
+              ? 'Tap Connect to reconnect'
+              : 'Tap a device below to connect';
     }
 
     return Card(
@@ -291,18 +357,37 @@ class _StatusCard extends StatelessWidget {
                 ),
               ],
             ),
-            if (onDisconnect != null || onForget != null) ...[
+            if (onDisconnect != null ||
+                onCancel != null ||
+                onConnect != null ||
+                onForget != null) ...[
               const SizedBox(height: 16),
               const Divider(height: 1),
               const SizedBox(height: 12),
               Wrap(
                 spacing: 8,
                 children: [
+                  if (onConnect != null)
+                    FilledButton.icon(
+                      onPressed: onConnect,
+                      icon: const Icon(Icons.link_rounded, size: 18),
+                      label: const Text('Connect'),
+                    ),
                   if (onDisconnect != null)
                     OutlinedButton.icon(
                       onPressed: onDisconnect,
                       icon: const Icon(Icons.link_off_rounded, size: 18),
                       label: const Text('Disconnect'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: accentColor,
+                        side: BorderSide(color: accentColor.withValues(alpha: 0.5)),
+                      ),
+                    ),
+                  if (onCancel != null)
+                    OutlinedButton.icon(
+                      onPressed: onCancel,
+                      icon: const Icon(Icons.close_rounded, size: 18),
+                      label: const Text('Cancel'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: accentColor,
                         side: BorderSide(color: accentColor.withValues(alpha: 0.5)),
@@ -320,6 +405,66 @@ class _StatusCard extends StatelessWidget {
                 ],
               ),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Background reliability prompt ──────────────────────────────────────────
+
+/// Shown when the gateway is known but Android hasn't granted the battery-
+/// optimization exemption — without it, the app can't reliably reconnect in
+/// the background when fully closed (it can only show a plain "tap to open"
+/// notification instead of actually connecting). Purely informational/opt-in
+/// — the app works fine without this, just less automatically.
+class _BatteryOptimizationCard extends StatelessWidget {
+  const _BatteryOptimizationCard({required this.onEnable});
+
+  final VoidCallback onEnable;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    return Card(
+      elevation: 0,
+      color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.battery_alert_outlined,
+                color: colorScheme.onSurfaceVariant, size: 22),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Reconnect automatically when closed',
+                    style: textTheme.bodyMedium
+                        ?.copyWith(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Allow SDolve to run in the background so it connects to '
+                    'the gateway on its own, even after fully closing the app.',
+                    style: textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  OutlinedButton(
+                    onPressed: onEnable,
+                    child: const Text('Enable'),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
