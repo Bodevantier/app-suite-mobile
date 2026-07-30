@@ -4,17 +4,15 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../models/n2k_device_info.dart';
+import '../pages/about_page.dart';
 import '../pages/ble_connection_page.dart';
-import '../pages/ble_monitor_page.dart';
 import '../pages/n2k_device_detail_page.dart';
 import '../pages/navigation_data_page.dart';
-import '../pages/node_settings_page.dart';
 import '../pages/temperature_data_page.dart';
 import '../pages/fluid_level_data_page.dart';
 import '../pages/engine_data_page.dart';
 import '../pages/welcome_page.dart';
 import '../pages/wind_data_page.dart';
-import '../widgets/live_activity_indicator.dart';
 import '../services/node_settings_service.dart';
 import '../controllers/ble_controller.dart';
 import 'app_dependencies.dart';
@@ -115,23 +113,19 @@ Future<void> _openBleSetupFlow(
 ) async {
   await Navigator.of(context).push(
     MaterialPageRoute<void>(
-      builder: (_) => BleMonitorPage(
+      builder: (_) => BleConnectionPage(
         controller: dependencies.bleGatewayController,
-        autoStartScan: true,
-        onConnectionReady: (monitorContext) async {
-          // Remember this gateway and start auto-connect for future launches.
-          final deviceId =
-              dependencies.bleGatewayController.connectedDevice?.remoteId.str;
-          if (deviceId != null) {
-            unawaited(dependencies.preferences.saveKnownGatewayId(deviceId));
-            dependencies.autoConnectService.start(deviceId);
-          }
-
+        autoConnectService: dependencies.autoConnectService,
+        preferences: dependencies.preferences,
+        // BleConnectionPage's own _connect() already remembers the gateway
+        // and starts auto-connect for future launches — this callback only
+        // needs to advance past the setup flow.
+        onConnectionReady: (connectionContext) async {
           // Once paired with the gateway, the home page automatically shows
           // every N2K sensor present on the bus — no per-sensor "Add" step.
           dependencies.appSetupController.completeSetup();
-          if (Navigator.of(monitorContext).canPop()) {
-            Navigator.of(monitorContext).popUntil((route) => route.isFirst);
+          if (Navigator.of(connectionContext).canPop()) {
+            Navigator.of(connectionContext).popUntil((route) => route.isFirst);
           }
         },
       ),
@@ -264,6 +258,17 @@ class _AppHomePageState extends State<AppHomePage> {
           appBar: AppBar(
             title: const Text('Home'),
             actions: [
+              IconButton(
+                tooltip: 'About',
+                icon: const Icon(Icons.info_outline),
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const AboutPage(),
+                    ),
+                  );
+                },
+              ),
               _GatewayStatusIcon(
                 isConnected: isConnected,
                 isConnecting: isConnecting,
@@ -336,17 +341,6 @@ class _AppHomePageState extends State<AppHomePage> {
                                           dependencies.nodeSettings,
                                       telemetryController:
                                           dependencies.telemetryController,
-                                      onOpenSettings: () {
-                                        Navigator.of(context).push(
-                                          MaterialPageRoute<void>(
-                                            builder: (_) => NodeSettingsPage(
-                                              device: device,
-                                              settingsService:
-                                                  dependencies.nodeSettings,
-                                            ),
-                                          ),
-                                        );
-                                      },
                                       onTap: !isDeviceLive
                                           ? null
                                           : () {
@@ -407,6 +401,8 @@ class _AppHomePageState extends State<AppHomePage> {
                                                     .telemetryController,
                                                 windAverages:
                                                     dependencies.windAverages,
+                                                settingsService:
+                                                    dependencies.nodeSettings,
                                                 hasNavigationDevice:
                                                     devices.any(
                                                   (d) => d.isNavigationDevice,
@@ -424,6 +420,8 @@ class _AppHomePageState extends State<AppHomePage> {
                                                 device: device,
                                                 telemetryController: dependencies
                                                     .telemetryController,
+                                                settingsService:
+                                                    dependencies.nodeSettings,
                                               ),
                                             ),
                                           );
@@ -522,6 +520,9 @@ class _AppHomePageState extends State<AppHomePage> {
 /// is disabled — opening the data page would only show stale numbers.
 const Duration _kDeviceOfflineAfter = Duration(seconds: 15);
 
+String _capitalize(String s) =>
+    s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1)}';
+
 bool _isDeviceLive(N2kDeviceInfo device) {
   if (!device.isOnline) return false;
   final lastSeen = device.lastSeen;
@@ -537,7 +538,6 @@ class _HomeDeviceCard extends StatefulWidget {
     required this.onTap,
     this.settingsService,
     this.telemetryController,
-    this.onOpenSettings,
   });
 
   final N2kDeviceInfo device;
@@ -545,7 +545,6 @@ class _HomeDeviceCard extends StatefulWidget {
   final VoidCallback? onTap;
   final NodeSettingsService? settingsService;
   final BleController? telemetryController;
-  final VoidCallback? onOpenSettings;
 
   @override
   State<_HomeDeviceCard> createState() => _HomeDeviceCardState();
@@ -746,8 +745,8 @@ class _HomeDeviceCardState extends State<_HomeDeviceCard>
                       const SizedBox(height: 2),
                       Text(
                         isLive
-                            ? 'src ${device.sourceAddress} · ${device.displayCategory}'
-                            : 'Offline · src ${device.sourceAddress} · ${device.displayCategory}',
+                            ? _capitalize(device.displayCategory)
+                            : 'Offline · ${_capitalize(device.displayCategory)}',
                         style: tt.bodySmall?.copyWith(
                           color: cs.onSurface.withValues(alpha: 0.6),
                         ),
@@ -757,34 +756,6 @@ class _HomeDeviceCardState extends State<_HomeDeviceCard>
                     ],
                   ),
                 ),
-                const SizedBox(width: 10),
-                // Liveness pulse — brightness/pulse depth decays as data stalls.
-                LiveActivityIndicator(
-                  lastEventAt: device.lastSeen,
-                  size: 9,
-                  staleAfter: const Duration(seconds: 8),
-                ),
-                // Chevron when openable, cloud-off icon when offline.
-                Icon(
-                  isLive ? Icons.chevron_right : Icons.cloud_off,
-                  size: 18,
-                  color: cs.onSurface.withValues(alpha: 0.3),
-                ),
-                // Per-device settings gear. Hit area is large enough to
-                // hit reliably without intercepting the rest of the card.
-                if (widget.onOpenSettings != null)
-                  IconButton(
-                    tooltip: 'Device settings',
-                    icon: const Icon(Icons.settings_outlined, size: 20),
-                    color: cs.onSurface.withValues(alpha: 0.55),
-                    onPressed: widget.onOpenSettings,
-                    constraints: const BoxConstraints(
-                      minWidth: 36,
-                      minHeight: 36,
-                    ),
-                    padding: EdgeInsets.zero,
-                    visualDensity: VisualDensity.compact,
-                  ),
               ],
             ),
           ),

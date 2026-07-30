@@ -8,17 +8,57 @@ import '../ble/services/auto_connect_service.dart';
 import '../ble/services/ble_background_service.dart';
 import '../services/app_preferences_service.dart';
 
+/// Friendly name for the connected gateway. `platformName` is often empty
+/// right after connecting (Android hasn't cached it yet), so fall back to
+/// the advertised name seen during the current scan, then to the name saved
+/// the last time we actually saw one (auto-reconnect skips scanning
+/// entirely, so there may be no live scan result at all). A raw MAC address
+/// is not something a normal user should have to read to know which device
+/// they're connected to.
+String? _resolveConnectedDeviceName(
+  BluetoothDevice? device,
+  List<ScanResult> discovered,
+  String? savedName,
+) {
+  if (device == null) return null;
+  final platformName = device.platformName;
+  if (platformName.isNotEmpty) return platformName;
+  for (final result in discovered) {
+    if (result.device.remoteId != device.remoteId) continue;
+    final advName = result.advertisementData.advName;
+    if (advName.isNotEmpty) return advName;
+    break;
+  }
+  if (savedName != null && savedName.isNotEmpty) return savedName;
+  return 'Gateway';
+}
+
+/// Qualitative signal strength — easier for a normal user to read than a
+/// raw dBm number.
+String _rssiSignalLabel(int rssi) {
+  if (rssi >= -60) return 'Excellent';
+  if (rssi >= -70) return 'Good';
+  if (rssi >= -80) return 'Fair';
+  if (rssi >= -90) return 'Weak';
+  return 'Poor';
+}
+
 class BleConnectionPage extends StatefulWidget {
   const BleConnectionPage({
     super.key,
     required this.controller,
     required this.autoConnectService,
     required this.preferences,
+    this.onConnectionReady,
   });
 
   final BleGatewayController controller;
   final AutoConnectService autoConnectService;
   final AppPreferencesService preferences;
+  // Fired once when a connection is established after this page was opened
+  // (not for a connection that already existed on entry) — used by the
+  // first-time setup flow to advance past pairing automatically.
+  final Future<void> Function(BuildContext context)? onConnectionReady;
 
   @override
   State<BleConnectionPage> createState() => _BleConnectionPageState();
@@ -28,10 +68,13 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
   // Null while loading. False shows the "enable reliable background
   // reconnect" card below the status card — see _BatteryOptimizationCard.
   bool? _ignoringBatteryOptimizations;
+  bool _didForwardAfterConnect = false;
+  late final bool _wasConnectedOnEntry;
 
   @override
   void initState() {
     super.initState();
+    _wasConnectedOnEntry = widget.controller.isConnected;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await widget.controller.initialize();
       if (!mounted) return;
@@ -81,12 +124,20 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
     );
   }
 
-  Future<void> _connect(dynamic scanResult) async {
+  Future<void> _connect(ScanResult scanResult) async {
     try {
       await widget.controller.connect(scanResult);
       final id = widget.controller.connectedDevice?.remoteId.str;
       if (id != null) {
         unawaited(widget.preferences.saveKnownGatewayId(id));
+        // Remember whichever name we actually saw advertised, so a future
+        // direct reconnect (no scan step) can still show a real name.
+        final name = scanResult.device.platformName.isNotEmpty
+            ? scanResult.device.platformName
+            : scanResult.advertisementData.advName;
+        if (name.isNotEmpty) {
+          unawaited(widget.preferences.saveKnownGatewayName(name));
+        }
         widget.autoConnectService.start(id);
       }
     } catch (error) {
@@ -128,6 +179,7 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
   Future<void> _forgetGateway() async {
     widget.autoConnectService.stop();
     await widget.preferences.saveKnownGatewayId(null);
+    await widget.preferences.saveKnownGatewayName(null);
     await widget.controller.disconnect();
     if (mounted) setState(() {});
   }
@@ -144,6 +196,11 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
         final connectedId = controller.connectedDevice?.remoteId.str;
         final knownId = widget.preferences.knownGatewayId;
         final discovered = controller.discoveredDevices;
+        final connectedName = _resolveConnectedDeviceName(
+          controller.connectedDevice,
+          discovered,
+          widget.preferences.knownGatewayName,
+        );
         // AutoConnectService can be mid-attempt (adapter wait, scan) before
         // the transport itself reports isConnecting — match the home page's
         // definition so the Connecting/Cancel UI shows for the whole window.
@@ -151,6 +208,17 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
             (widget.autoConnectService.isRunning &&
                 !controller.isConnected &&
                 widget.autoConnectService.status.isNotEmpty);
+
+        if (!_didForwardAfterConnect &&
+            !_wasConnectedOnEntry &&
+            controller.isConnected &&
+            widget.onConnectionReady != null) {
+          _didForwardAfterConnect = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            unawaited(widget.onConnectionReady!(context));
+          });
+        }
 
         return Scaffold(
           appBar: AppBar(
@@ -177,8 +245,7 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
                 isConnected: controller.isConnected,
                 isConnecting: isConnecting,
                 isScanning: controller.isScanning,
-                connectedName: controller.connectedDevice?.platformName,
-                connectedId: connectedId,
+                connectedName: connectedName,
                 hasKnownGateway: knownId != null,
                 autoStatus: widget.autoConnectService.status,
                 onDisconnect:
@@ -245,7 +312,6 @@ class _StatusCard extends StatelessWidget {
     required this.isConnecting,
     required this.isScanning,
     required this.connectedName,
-    required this.connectedId,
     required this.hasKnownGateway,
     required this.autoStatus,
     required this.onDisconnect,
@@ -258,7 +324,6 @@ class _StatusCard extends StatelessWidget {
   final bool isConnecting;
   final bool isScanning;
   final String? connectedName;
-  final String? connectedId;
   final bool hasKnownGateway;
   final String autoStatus;
   final VoidCallback? onDisconnect;
@@ -281,7 +346,7 @@ class _StatusCard extends StatelessWidget {
       icon = Icons.bluetooth_connected_rounded;
       accentColor = Colors.green.shade600;
       bgColor = Colors.green.shade50;
-      title = connectedName ?? '';
+      title = connectedName ?? 'Gateway';
       detail = 'Connected';
     } else if (isConnecting) {
       icon = Icons.bluetooth_searching_rounded;
@@ -341,17 +406,6 @@ class _StatusCard extends StatelessWidget {
                           color: accentColor.withValues(alpha: 0.8),
                         ),
                       ),
-                      if (connectedId != null) ...[
-                        const SizedBox(height: 3),
-                        Text(
-                          connectedId!,
-                          style: textTheme.bodySmall?.copyWith(
-                            color: accentColor.withValues(alpha: 0.55),
-                            fontFamily: 'monospace',
-                            letterSpacing: 0.3,
-                          ),
-                        ),
-                      ],
                     ],
                   ),
                 ),
@@ -698,10 +752,9 @@ class _GatewayCard extends StatelessWidget {
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
-                          '$rssi dBm  ·  $id',
+                          _rssiSignalLabel(rssi),
                           style: textTheme.bodySmall?.copyWith(
                             color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
-                            fontFamily: 'monospace',
                           ),
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -758,14 +811,6 @@ class _DeviceInfoSheet extends StatelessWidget {
   final List<String> serviceUuids;
   final Map<int, List<int>> manufacturerData;
   final bool isConnected;
-
-  String _signalLabel() {
-    if (rssi >= -60) return 'Excellent';
-    if (rssi >= -70) return 'Good';
-    if (rssi >= -80) return 'Fair';
-    if (rssi >= -90) return 'Weak';
-    return 'Poor';
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -833,7 +878,7 @@ class _DeviceInfoSheet extends StatelessWidget {
           _InfoRow(label: 'MAC Address', value: id, monospace: true),
           _InfoRow(
             label: 'Signal',
-            value: '${_signalLabel()}  ·  $rssi dBm',
+            value: '${_rssiSignalLabel(rssi)}  ·  $rssi dBm',
             trailing: _RssiBars(rssi: rssi),
           ),
           if (txPower != null)

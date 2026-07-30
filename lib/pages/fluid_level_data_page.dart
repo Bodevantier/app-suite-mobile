@@ -4,6 +4,7 @@ import '../controllers/ble_controller.dart';
 import '../models/n2k_device_info.dart';
 import '../models/node_settings.dart';
 import '../services/node_settings_service.dart';
+import 'node_settings_page.dart';
 
 /// Live view for an NMEA 2000 Fluid Level (PGN 127505) source — water,
 /// fuel, waste, oil, etc. Displays percentage, fluid type, tank instance
@@ -24,9 +25,22 @@ class FluidLevelDataPage extends StatelessWidget {
   final String? primaryActionLabel;
   final VoidCallback? onPrimaryAction;
 
+  void _openSettings(BuildContext context) {
+    if (device == null || settingsService == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => NodeSettingsPage(
+          device: device!,
+          settingsService: settingsService!,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final settingsListenable = settingsService;
+    final hasSettings = device != null && settingsService != null;
     return Scaffold(
       backgroundColor: const Color(0xfff5f7fb),
       appBar: AppBar(
@@ -52,6 +66,14 @@ class FluidLevelDataPage extends StatelessWidget {
             );
           },
         ),
+        actions: [
+          if (hasSettings)
+            IconButton(
+              icon: const Icon(Icons.settings_outlined),
+              tooltip: 'Device settings',
+              onPressed: () => _openSettings(context),
+            ),
+        ],
       ),
       body: SafeArea(
         child: AnimatedBuilder(

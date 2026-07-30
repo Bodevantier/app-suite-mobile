@@ -4,23 +4,46 @@ import 'package:flutter/material.dart';
 
 import '../controllers/ble_controller.dart';
 import '../models/n2k_device_info.dart';
+import '../services/node_settings_service.dart';
+import 'node_settings_page.dart';
 
 class NavigationDataPage extends StatelessWidget {
   const NavigationDataPage({
     super.key,
     required this.telemetryController,
     this.device,
+    this.settingsService,
     this.primaryActionLabel,
     this.onPrimaryAction,
   });
 
   final BleController telemetryController;
   final N2kDeviceInfo? device;
+  final NodeSettingsService? settingsService;
   final String? primaryActionLabel;
   final VoidCallback? onPrimaryAction;
 
+  void _openSettings(BuildContext context) {
+    if (device == null || settingsService == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => NodeSettingsPage(
+          device: device!,
+          settingsService: settingsService!,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final hasSettings = device != null && settingsService != null;
+    final overrideName = hasSettings
+        ? settingsService!.forDevice(device!).customName
+        : null;
+    final title = (overrideName != null && overrideName.trim().isNotEmpty)
+        ? overrideName
+        : (device?.displayName ?? 'Navigation');
     return Scaffold(
       backgroundColor: const Color(0xfff5f7fb),
       appBar: AppBar(
@@ -28,13 +51,21 @@ class NavigationDataPage extends StatelessWidget {
         centerTitle: true,
         backgroundColor: const Color(0xfff5f7fb),
         title: Text(
-          device?.displayName ?? 'Navigation',
+          title,
           style: const TextStyle(
             fontWeight: FontWeight.w700,
             fontSize: 20,
             color: Color(0xff000000),
           ),
         ),
+        actions: [
+          if (hasSettings)
+            IconButton(
+              icon: const Icon(Icons.settings_outlined),
+              tooltip: 'Device settings',
+              onPressed: () => _openSettings(context),
+            ),
+        ],
       ),
       body: SafeArea(
         child: AnimatedBuilder(

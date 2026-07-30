@@ -10,7 +10,8 @@ import 'node_settings_page.dart';
 
 /// Live view for an NMEA 2000 Engine (PGN 127488) source. Shows an analogue
 /// RPM gauge plus a numeric readout. The RPM-calibration parameters live on
-/// the per-device settings screen (the gear icon on the home card), not here.
+/// the per-device settings screen (the gear icon in this page's app bar),
+/// not here.
 class EngineDataPage extends StatefulWidget {
   const EngineDataPage({
     super.key,

@@ -6,7 +6,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../controllers/ble_controller.dart';
 import '../models/n2k_device_info.dart';
+import '../services/node_settings_service.dart';
 import '../services/wind_averages_service.dart';
+import 'node_settings_page.dart';
 import 'wind_settings_page.dart';
 
 /// One angular sample retained for the rolling wind-angle heatmap.
@@ -23,6 +25,7 @@ class WindDataPage extends StatefulWidget {
     this.device,
     this.hasNavigationDevice = false,
     this.windAverages,
+    this.settingsService,
     this.primaryActionLabel,
     this.onPrimaryAction,
   });
@@ -31,6 +34,7 @@ class WindDataPage extends StatefulWidget {
   final N2kDeviceInfo? device;
   final bool hasNavigationDevice;
   final WindAveragesService? windAverages;
+  final NodeSettingsService? settingsService;
   final String? primaryActionLabel;
   final VoidCallback? onPrimaryAction;
 
@@ -95,6 +99,20 @@ class _WindDataPageState extends State<WindDataPage> {
             setState(() => _windSettings = updated);
           },
           onClearTrail: _clearTrailData,
+        ),
+      ),
+    );
+  }
+
+  void _openNodeSettings() {
+    final device = widget.device;
+    final settingsService = widget.settingsService;
+    if (device == null || settingsService == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => NodeSettingsPage(
+          device: device,
+          settingsService: settingsService,
         ),
       ),
     );
@@ -178,6 +196,15 @@ class _WindDataPageState extends State<WindDataPage> {
 
   @override
   Widget build(BuildContext context) {
+    final device = widget.device;
+    final settingsService = widget.settingsService;
+    final hasNodeSettings = device != null && settingsService != null;
+    final overrideName = hasNodeSettings
+        ? settingsService.forDevice(device).customName
+        : null;
+    final title = (overrideName != null && overrideName.trim().isNotEmpty)
+        ? overrideName
+        : (device == null ? 'Wind Data' : 'Wind Device');
     return Scaffold(
       backgroundColor: const Color(0xfff5f7fb),
       appBar: AppBar(
@@ -185,7 +212,7 @@ class _WindDataPageState extends State<WindDataPage> {
         centerTitle: true,
         backgroundColor: const Color(0xfff5f7fb),
         title: Text(
-          widget.device == null ? 'Wind Data' : 'Wind Device',
+          title,
           style: const TextStyle(
             fontWeight: FontWeight.w700,
             fontSize: 20,
@@ -193,7 +220,13 @@ class _WindDataPageState extends State<WindDataPage> {
           ),
         ),
         actions: [
-          // Settings button — always visible.
+          if (hasNodeSettings)
+            IconButton(
+              icon: const Icon(Icons.settings_outlined),
+              tooltip: 'Device settings',
+              onPressed: _openNodeSettings,
+            ),
+          // Wind-specific trail/averaging settings — always visible.
           IconButton(
             icon: const Icon(Icons.tune_rounded, color: Color(0xff64748b)),
             tooltip: 'Wind settings',

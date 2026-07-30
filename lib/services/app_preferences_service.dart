@@ -10,6 +10,7 @@ import '../models/n2k_device_info.dart';
 ///   - [_keySetupComplete]      — whether the initial setup wizard has been done
 ///   - [_keyAddedDevices]       — JSON list of N2K devices the user has added
 ///   - [_keyKnownGatewayId]     — BLE device ID of the previously connected gateway
+///   - [_keyKnownGatewayName]   — last advertised/platform name seen for that gateway
 ///   - [_keyCachedN2kDevices]   — JSON list of the last N2K device snapshot
 ///   - [_keyWindTwsSamples]     — JSON list of TWS ring-buffer samples (last 31 min)
 ///   - [_keyWindAwsSamples]     — JSON list of AWS ring-buffer samples (last 31 min)
@@ -21,6 +22,7 @@ class AppPreferencesService {
   static const _keySetupComplete = 'setup_complete';
   static const _keyAddedDevices = 'added_devices';
   static const _keyKnownGatewayId = 'known_gateway_id';
+  static const _keyKnownGatewayName = 'known_gateway_name';
   static const _keyCachedN2kDevices = 'cached_n2k_devices';
   static const _keyForgottenN2kSources = 'forgotten_n2k_sources';
   static const _keyWindTwsSamples = 'wind_tws_samples';
@@ -71,6 +73,19 @@ class AppPreferencesService {
       await _prefs.remove(_keyKnownGatewayId);
     } else {
       await _prefs.setString(_keyKnownGatewayId, deviceId);
+    }
+  }
+
+  /// Last advertised/platform name seen for the known gateway. Used so a
+  /// direct reconnect (no scan step) can still show a real device name
+  /// instead of a guessed generic label.
+  String? get knownGatewayName => _prefs.getString(_keyKnownGatewayName);
+
+  Future<void> saveKnownGatewayName(String? name) async {
+    if (name == null || name.isEmpty) {
+      await _prefs.remove(_keyKnownGatewayName);
+    } else {
+      await _prefs.setString(_keyKnownGatewayName, name);
     }
   }
 
@@ -187,6 +202,7 @@ class AppPreferencesService {
     await _prefs.remove(_keySetupComplete);
     await _prefs.remove(_keyAddedDevices);
     await _prefs.remove(_keyKnownGatewayId);
+    await _prefs.remove(_keyKnownGatewayName);
     await _prefs.remove(_keyCachedN2kDevices);
     await _prefs.remove(_keyForgottenN2kSources);
     await _prefs.remove(_keyWindTwsSamples);

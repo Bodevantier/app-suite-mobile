@@ -6,6 +6,9 @@ import '../models/node_settings.dart';
 import '../models/engine_settings.dart';
 import '../services/node_settings_service.dart';
 
+String _capitalize(String s) =>
+    s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1)}';
+
 /// Per-node configuration screen. Currently tailored for fluid-level
 /// sensors (PGN 127505) but the layout is generic enough to extend to
 /// other categories — the irrelevant sections are simply hidden when the
@@ -576,7 +579,7 @@ class _DeviceHeader extends StatelessWidget {
           ),
           const SizedBox(height: 2),
           Text(
-            'src ${device.sourceAddress} · ${device.displayCategory}',
+            'src ${device.sourceAddress} · ${_capitalize(device.displayCategory)}',
             style: TextStyle(
               fontSize: 12,
               color: cs.onSurface.withValues(alpha: 0.65),
