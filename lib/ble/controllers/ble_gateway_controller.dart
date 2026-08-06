@@ -47,6 +47,18 @@ class BleGatewayController extends ChangeNotifier {
   bool _lastConnected = false;
   DateTime? _lastChunkAt;
 
+  /// True while Demo Mode (About page) is simulating a gateway connection.
+  /// Overrides [isConnected] and [devices] so every page renders exactly as
+  /// it would with a real gateway, without needing any page-level changes.
+  bool _demoModeActive = false;
+
+  /// Enables/disables Demo Mode. Safe to call repeatedly with the same value.
+  void setDemoMode(bool active) {
+    if (_demoModeActive == active) return;
+    _demoModeActive = active;
+    notifyListeners();
+  }
+
   /// Sources the user has explicitly removed (swipe-to-delete on home page).
   /// Each entry stores the UTC time of dismissal. The src stays hidden
   /// (across periodic gateway snapshots and across app restarts) until a
@@ -62,15 +74,26 @@ class BleGatewayController extends ChangeNotifier {
 
   List<ScanResult> get discoveredDevices => transport.devices;
   BluetoothDevice? get connectedDevice => transport.connectedDevice;
+  String? get connectedDeviceName => transport.connectedDeviceName;
   bool get isScanning => transport.isScanning;
   bool get isConnecting => transport.isConnecting;
-  bool get isConnected => transport.isConnected;
+  bool get isConnected => _demoModeActive || transport.isConnected;
   bool get hasNotifyCharacteristic => transport.hasNotifyCharacteristic;
   bool get hasCommandCharacteristic => transport.hasCommandCharacteristic;
   String get bleStatus => transport.status;
   bool get n2kScanInProgress => telemetryController?.n2kScanInProgress ?? false;
   bool get n2kScanComplete => telemetryController?.n2kScanComplete ?? false;
   List<N2kDeviceInfo> get devices {
+    if (_demoModeActive) {
+      // Demo Mode only ever feeds the binary tracker (see DemoDataService) —
+      // ignore the text-snapshot layer entirely so any stale cached devices
+      // from a previous real connection can't bleed into the demo list.
+      final binary = telemetryController?.decodedDevices ?? const <N2kDeviceInfo>[];
+      final visible = binary.where((d) => !d.isBleGatewayDevice).toList()
+        ..sort((a, b) => a.src.compareTo(b.src));
+      return List<N2kDeviceInfo>.unmodifiable(visible);
+    }
+
     // Merge binary (live-data flags) + text-snapshot (proper names).
     // The STM32 sends a text snapshot every ~30 s with resolved device names;
     // the binary N2K tracker has live wind/temperature flags and online status.
@@ -144,6 +167,11 @@ class BleGatewayController extends ChangeNotifier {
           manufacturer: _pickBetterMfr(t.manufacturer, b.manufacturer)
               ? t.manufacturer
               : b.manufacturer,
+          // Never let a resolved NAME regress to null — nodeSettingsKey()
+          // switches storage keys based on this field, and losing it here
+          // caused custom device names to flash back to the default name
+          // whenever a binary CAN frame arrived right after a text snapshot.
+          nameValue: b.nameValue ?? t.nameValue,
           category: textCategory,
           hasProductInfo: b.hasProductInfo || t.hasProductInfo,
           hasAddressClaim: b.hasAddressClaim || t.hasAddressClaim,
@@ -308,6 +336,11 @@ class BleGatewayController extends ChangeNotifier {
   }
 
   void _handleDependencyChanged() {
+    if (_demoModeActive) {
+      // Keeps the home-page gateway icon's "fresh data" pulse animating
+      // while demo frames are flowing, same as real BLE notifications do.
+      _lastChunkAt = DateTime.now();
+    }
     if (_lastConnected != transport.isConnected) {
       _lastConnected = transport.isConnected;
       if (!_lastConnected) {

@@ -270,15 +270,17 @@ class N2kDeviceTracker {
     debugPrint('[N2K] AddressClaim src=${frame.sourceAddress} mfr=$manufacturerCode class=$deviceClass fn=$deviceFunction raw=${frame.data.map((b) => b.toRadixString(16).padLeft(2, "0")).join(" ")}');
     final device = _ensureDevice(frame.sourceAddress);
 
+    final nameValueHex = name.toRadixString(16).padLeft(16, '0');
     _devices[frame.sourceAddress] = device.copyWith(
       hasAddressClaim: true,
       manufacturer: 'Manufacturer code $manufacturerCode',
       category: n2kCategoryFromCodes(deviceClass, deviceFunction) ?? 'unknown',
+      nameValue: nameValueHex,
       extraData: <String, dynamic>{
         ...device.extraData,
         'deviceFunction': deviceFunction,
         'deviceClass': deviceClass,
-        'nameValue': name.toRadixString(16).padLeft(16, '0'),
+        'nameValue': nameValueHex,
       },
     );
   }

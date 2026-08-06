@@ -8,19 +8,26 @@ import '../ble/services/auto_connect_service.dart';
 import '../ble/services/ble_background_service.dart';
 import '../services/app_preferences_service.dart';
 
-/// Friendly name for the connected gateway. `platformName` is often empty
-/// right after connecting (Android hasn't cached it yet), so fall back to
-/// the advertised name seen during the current scan, then to the name saved
-/// the last time we actually saw one (auto-reconnect skips scanning
-/// entirely, so there may be no live scan result at all). A raw MAC address
-/// is not something a normal user should have to read to know which device
-/// they're connected to.
+/// Friendly name for the connected gateway. While connected we already know
+/// exactly which physical device this is — the question is only whether we
+/// have a human-friendly label for it yet, never whether the device itself
+/// is "unknown". Priority: [confirmedName] (read directly off the connected
+/// peripheral's own GAP Device Name characteristic — the ground truth, not
+/// dependent on OS caching), then `platformName` (often empty right after a
+/// direct-by-id reconnect, since Android hasn't cached it), then the
+/// advertised name seen during the current scan, then the name saved the
+/// last time we actually saw one (auto-reconnect skips scanning entirely,
+/// so there may be no live scan result at all). If truly none of those are
+/// available, fall back to the device's own address rather than a vague
+/// placeholder — that's still an honest, specific answer to "which device".
 String? _resolveConnectedDeviceName(
   BluetoothDevice? device,
   List<ScanResult> discovered,
   String? savedName,
+  String? confirmedName,
 ) {
   if (device == null) return null;
+  if (confirmedName != null && confirmedName.isNotEmpty) return confirmedName;
   final platformName = device.platformName;
   if (platformName.isNotEmpty) return platformName;
   for (final result in discovered) {
@@ -30,7 +37,18 @@ String? _resolveConnectedDeviceName(
     break;
   }
   if (savedName != null && savedName.isNotEmpty) return savedName;
-  return 'Gateway';
+  return device.remoteId.str;
+}
+
+/// Friendly name for a scan result — `platformName` is frequently empty
+/// right when a device is first seen (the OS hasn't cached it yet), so fall
+/// back to the name it's actively advertising.
+String _scanResultName(ScanResult result) {
+  final platformName = result.device.platformName;
+  if (platformName.isNotEmpty) return platformName;
+  final advName = result.advertisementData.advName;
+  if (advName.isNotEmpty) return advName;
+  return 'Unknown Device';
 }
 
 /// Qualitative signal strength — easier for a normal user to read than a
@@ -50,6 +68,7 @@ class BleConnectionPage extends StatefulWidget {
     required this.autoConnectService,
     required this.preferences,
     this.onConnectionReady,
+    this.demoModeActive = false,
   });
 
   final BleGatewayController controller;
@@ -59,6 +78,9 @@ class BleConnectionPage extends StatefulWidget {
   // (not for a connection that already existed on entry) — used by the
   // first-time setup flow to advance past pairing automatically.
   final Future<void> Function(BuildContext context)? onConnectionReady;
+  // While Demo Mode is simulating a connection, real scanning/connecting
+  // would race the simulated data — this page shows an explainer instead.
+  final bool demoModeActive;
 
   @override
   State<BleConnectionPage> createState() => _BleConnectionPageState();
@@ -75,6 +97,7 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
   void initState() {
     super.initState();
     _wasConnectedOnEntry = widget.controller.isConnected;
+    if (widget.demoModeActive) return;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await widget.controller.initialize();
       if (!mounted) return;
@@ -84,6 +107,28 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
     });
     unawaited(_refreshBatteryOptimizationStatus());
   }
+
+  @override
+  void dispose() {
+    // Standard BLE practice (see Android's own BLE guide): don't leave a
+    // scan running once the user isn't looking at the discovery UI anymore
+    // — it keeps the radio hot for no benefit. Skip it while a connect
+    // attempt is actually in flight, including AutoConnectService's own
+    // brief scan-fallback window, so navigating away doesn't cut that off.
+    if (widget.controller.isScanning && !_isConnectingNow) {
+      unawaited(widget.controller.stopScan());
+    }
+    super.dispose();
+  }
+
+  /// Mirrors the "Connecting…" condition used in [build] — AutoConnectService
+  /// can be mid-attempt (adapter wait, its own scan-fallback) before the
+  /// transport itself reports isConnecting.
+  bool get _isConnectingNow =>
+      widget.controller.isConnecting ||
+      (widget.autoConnectService.isRunning &&
+          !widget.controller.isConnected &&
+          widget.autoConnectService.status.isNotEmpty);
 
   Future<void> _refreshBatteryOptimizationStatus() async {
     final ignoring = await BleBackgroundService.isIgnoringBatteryOptimizations();
@@ -99,9 +144,7 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
 
   void _showDeviceSheet(ScanResult result) {
     final ad = result.advertisementData;
-    final name = result.device.platformName.isNotEmpty
-        ? result.device.platformName
-        : (ad.advName.isNotEmpty ? ad.advName : 'Unknown Device');
+    final name = _scanResultName(result);
     final id = result.device.remoteId.str;
     final isThisConnected = widget.controller.connectedDevice?.remoteId.str == id;
 
@@ -132,10 +175,8 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
         unawaited(widget.preferences.saveKnownGatewayId(id));
         // Remember whichever name we actually saw advertised, so a future
         // direct reconnect (no scan step) can still show a real name.
-        final name = scanResult.device.platformName.isNotEmpty
-            ? scanResult.device.platformName
-            : scanResult.advertisementData.advName;
-        if (name.isNotEmpty) {
+        final name = _scanResultName(scanResult);
+        if (name != 'Unknown Device') {
           unawaited(widget.preferences.saveKnownGatewayName(name));
         }
         widget.autoConnectService.start(id);
@@ -181,11 +222,22 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
     await widget.preferences.saveKnownGatewayId(null);
     await widget.preferences.saveKnownGatewayName(null);
     await widget.controller.disconnect();
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    // Forgetting clears the known-device id, so tapping it in the Nearby
+    // Devices list becomes the only way back — that list is empty/stale
+    // whenever scanning had already stopped (e.g. it was off the whole time
+    // we were connected), so make sure it's actually populated again.
+    if (!widget.controller.isScanning) {
+      unawaited(widget.controller.startScan());
+    }
+    setState(() {});
   }
 
   @override
   Widget build(BuildContext context) {
+    if (widget.demoModeActive) {
+      return const _DemoModeExplainer();
+    }
     return AnimatedBuilder(
       animation: Listenable.merge([
         widget.controller,
@@ -200,14 +252,9 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
           controller.connectedDevice,
           discovered,
           widget.preferences.knownGatewayName,
+          controller.connectedDeviceName,
         );
-        // AutoConnectService can be mid-attempt (adapter wait, scan) before
-        // the transport itself reports isConnecting — match the home page's
-        // definition so the Connecting/Cancel UI shows for the whole window.
-        final isConnecting = controller.isConnecting ||
-            (widget.autoConnectService.isRunning &&
-                !controller.isConnected &&
-                widget.autoConnectService.status.isNotEmpty);
+        final isConnecting = _isConnectingNow;
 
         if (!_didForwardAfterConnect &&
             !_wasConnectedOnEntry &&
@@ -279,7 +326,7 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
                   final id = result.device.remoteId.str;
                   final isThisConnected = connectedId == id;
                   final isKnown = knownId == id;
-                  final name = result.device.platformName;
+                  final name = _scanResultName(result);
 
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 8),
@@ -300,6 +347,46 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
           ),
         );
       },
+    );
+  }
+}
+
+// ─── Demo mode explainer ──────────────────────────────────────────────────────
+
+/// Shown instead of the real scan/connect UI while Demo Mode is active —
+/// scanning or connecting for real would just race the simulated data.
+class _DemoModeExplainer extends StatelessWidget {
+  const _DemoModeExplainer();
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Bluetooth')),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.theater_comedy_outlined, size: 48, color: cs.primary),
+              const SizedBox(height: 16),
+              const Text(
+                'Demo Mode is active',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Bluetooth scanning is disabled while showing simulated data. '
+                'Turn off Demo Mode from the About page to connect to a real gateway.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: cs.onSurface.withValues(alpha: 0.7)),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -346,7 +433,10 @@ class _StatusCard extends StatelessWidget {
       icon = Icons.bluetooth_connected_rounded;
       accentColor = Colors.green.shade600;
       bgColor = Colors.green.shade50;
-      title = connectedName ?? 'Gateway';
+      // connectedName is only null when there's no connected device at all,
+      // which can't happen while isConnected is true — this is unreachable
+      // in practice, just satisfying the nullable type.
+      title = connectedName ?? 'Connected Device';
       detail = 'Connected';
     } else if (isConnecting) {
       icon = Icons.bluetooth_searching_rounded;

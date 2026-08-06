@@ -54,6 +54,11 @@ class BleGatewayTransportService extends ChangeNotifier {
   final String binaryNotifyCharacteristicUuid;
   final String commandCharacteristicUuid;
 
+  // A foreground "find nearby devices" scan should never run forever — long
+  // enough to catch a device that's mid-advertising-interval, short enough
+  // not to just idle-burn battery once nothing new is showing up.
+  static const _scanTimeout = Duration(seconds: 15);
+
   var _devices = <ScanResult>[];
   final StreamController<BleTransportChunk> _chunkController =
       StreamController<BleTransportChunk>.broadcast();
@@ -66,6 +71,12 @@ class BleGatewayTransportService extends ChangeNotifier {
   StreamSubscription<dynamic>? _binaryNotifySub;
 
   BluetoothDevice? _connectedDevice;
+  // Read directly off the connected peripheral's standard GAP Device Name
+  // characteristic (0x2A00) rather than trusted to `platformName`, which
+  // reflects the OS's scan/bonding cache and can still be empty right after
+  // a direct-by-id reconnect (no scan step) even though the link is live and
+  // the actual device identity is not in question.
+  String? _connectedDeviceName;
   BluetoothCharacteristic? _notifyCharacteristic;
   BluetoothCharacteristic? _binaryNotifyCharacteristic;
   BluetoothCharacteristic? _commandCharacteristic;
@@ -81,6 +92,7 @@ class BleGatewayTransportService extends ChangeNotifier {
 
   List<ScanResult> get devices => List.unmodifiable(_devices);
   BluetoothDevice? get connectedDevice => _connectedDevice;
+  String? get connectedDeviceName => _connectedDeviceName;
   bool get isScanning => FlutterBluePlus.isScanningNow;
   bool get isConnecting => _isConnecting;
   bool get isConnected => _connectedDevice != null;
@@ -168,7 +180,14 @@ class BleGatewayTransportService extends ChangeNotifier {
       // can match by name ("sdolve" prefix) as well as by service UUID.
       // withServices would silently drop devices that don't include the UUID
       // in their advertisement packet even if they are valid gateways.
-      await FlutterBluePlus.startScan();
+      //
+      // Bounded duration: standard BLE practice (see Android's own BLE guide)
+      // is to never scan indefinitely — it keeps the radio hot and drains
+      // battery for no benefit once nothing new is going to show up. FBP
+      // auto-calls stopScan() when this fires, which flips isScanningNow ->
+      // false and this class already listens for that to notifyListeners(),
+      // so the UI reflects it with no extra wiring.
+      await FlutterBluePlus.startScan(timeout: _scanTimeout);
     } catch (error) {
       _status = 'Scan failed: $error';
       notifyListeners();
@@ -313,29 +332,83 @@ class BleGatewayTransportService extends ChangeNotifier {
       }
     });
 
-    // Request MTU 512 on Android so multi-frame binary packets arrive intact.
-    // mtu: null would silently leave the default 23-byte ATT MTU (20-byte payload)
-    // which truncates every binary notification and causes all parses to fail.
+    // Don't bundle the MTU request into connect() (mtu: 512 there would fire
+    // it immediately post-connect, in parallel with our own discoverServices()
+    // call). flutter_blue_plus's own docs describe exactly this race: some
+    // peripherals do their own connection-time GATT activity, which confuses
+    // an immediate requestMtu into returning early, and the ESP32 side has
+    // independently hit the same class of bug (status=22 /
+    // CONNECTION_TERMINATED_BY_LOCAL_HOST — see the deferred-conn-param-update
+    // comment in the firmware's BLE_GAP_EVENT_SUBSCRIBE handler). Requesting
+    // MTU only after discoverServices() has cleanly finished avoids it.
     await device.connect(
       license: License.free,
       autoConnect: false,
-      mtu: 512,
+      mtu: null,
       timeout: const Duration(seconds: 12),
     );
 
+    // Settle delay: calling discoverServices() the instant the link comes up
+    // (0 ms later) was observed to return a GATT_SUCCESS response with an
+    // *empty* services list — Android's own GATT cache isn't populated yet.
+    // flutter_blue_plus's built-in requestMtu() predelay (350 ms) used to
+    // absorb this incidentally when MTU was bundled into connect(); now that
+    // MTU is requested separately (see above), this replaces it explicitly.
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+
     await _finishConnectedSetup(device);
+  }
+
+  /// discoverServices() against this peripheral has been observed to
+  /// occasionally come back with an empty services list (Android's GATT
+  /// cache not populated yet, even after the settle delay above) or to
+  /// time out entirely. Both are transient — retrying once after a short
+  /// pause resolves it in practice, which is more robust than chasing an
+  /// exact settle-delay value that happens to work every time.
+  Future<List<BluetoothService>> _discoverServicesWithRetry(
+    BluetoothDevice device,
+  ) async {
+    Object? lastError;
+    for (var attempt = 1; attempt <= 2; attempt++) {
+      if (!device.isConnected) break;
+      try {
+        final services = await device.discoverServices();
+        if (services.isNotEmpty) return services;
+      } catch (error) {
+        lastError = error;
+      }
+      if (attempt < 2) {
+        await Future<void>.delayed(const Duration(milliseconds: 800));
+      }
+    }
+    if (lastError != null) throw lastError;
+    return const [];
   }
 
   /// Service discovery, characteristic lookup, subscribe, and bonding —
   /// everything after the link-layer GATT connection exists.
   Future<void> _finishConnectedSetup(BluetoothDevice device) async {
-    final services = await device.discoverServices();
+    final services = await _discoverServicesWithRetry(device);
     final gatewayService = _findServiceByUuid(services, gatewayServiceUuid);
     if (gatewayService == null) {
       await _disconnectQuietly(device);
       throw StateError(
         'Selected device does not expose the BLE gateway service.',
       );
+    }
+
+    // Request the larger MTU only now that discoverServices() has cleanly
+    // finished — see the comment on the connect() call above for why this
+    // order matters. Android-only: iOS negotiates its own effective MTU
+    // automatically and requestMtu() just throws there.
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      try {
+        await device.requestMtu(512);
+      } catch (_) {
+        // Non-fatal — worst case binary notifications stay on the default
+        // 23-byte MTU, which is degraded but still functional; losing the
+        // whole connection over it would be worse.
+      }
     }
 
     _notifyCharacteristic = _findCharacteristicByUuid(
@@ -361,6 +434,7 @@ class BleGatewayTransportService extends ChangeNotifier {
     }
 
     _connectedDevice = device;
+    _connectedDeviceName = await _readDeviceNameCharacteristic(services);
     _isConnecting = false;
 
     if (_notifyCharacteristic != null || _binaryNotifyCharacteristic != null) {
@@ -396,6 +470,7 @@ class BleGatewayTransportService extends ChangeNotifier {
     // noise and occasionally triggering race conditions.
     await _disconnectQuietly(_connectedDevice);
     _connectedDevice = null;
+    _connectedDeviceName = null;
     _notifyCharacteristic = null;
     _binaryNotifyCharacteristic = null;
     _commandCharacteristic = null;
@@ -407,6 +482,7 @@ class BleGatewayTransportService extends ChangeNotifier {
     await _unsubscribe();
     await _disconnectQuietly(device);
     _connectedDevice = null;
+    _connectedDeviceName = null;
     _notifyCharacteristic = null;
     _binaryNotifyCharacteristic = null;
     _commandCharacteristic = null;
@@ -544,12 +620,36 @@ class BleGatewayTransportService extends ChangeNotifier {
 
   Future<void> _handleDisconnectCleanup({required String autoStatus}) async {
     _connectedDevice = null;
+    _connectedDeviceName = null;
     _notifyCharacteristic = null;
     _binaryNotifyCharacteristic = null;
     _commandCharacteristic = null;
     _isConnecting = false;
     _status = autoStatus;
     notifyListeners();
+  }
+
+  // Standard Bluetooth GAP Device Name characteristic — present on any
+  // compliant peripheral (the ESP32 firmware sets it via
+  // ble_svc_gap_device_name_set), independent of the app's own gateway
+  // service/characteristics.
+  static const _deviceNameCharacteristicUuid = '2A00';
+
+  Future<String?> _readDeviceNameCharacteristic(
+    List<BluetoothService> services,
+  ) async {
+    final characteristic =
+        _findCharacteristicByUuid(services, _deviceNameCharacteristicUuid);
+    if (characteristic == null || !characteristic.properties.read) {
+      return null;
+    }
+    try {
+      final value = await characteristic.read();
+      final name = utf8.decode(value, allowMalformed: true).trim();
+      return name.isEmpty ? null : name;
+    } catch (_) {
+      return null;
+    }
   }
 
   BluetoothCharacteristic? _findCharacteristicByUuid(

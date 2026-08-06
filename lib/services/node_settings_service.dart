@@ -45,8 +45,35 @@ class NodeSettingsService extends ChangeNotifier {
   }
 
   /// Returns settings for [device] or [NodeSettings.empty] when none exist.
+  ///
+  /// [nodeSettingsKey] switches from the `src:<n>` fallback to the stable
+  /// `name:<hex>` key the moment a device's NMEA 2000 NAME resolves. If
+  /// settings were saved while still on the fallback key, look there too so
+  /// they aren't orphaned by that one-time transition — and self-heal by
+  /// migrating the entry to the stable key so future lookups don't need to
+  /// fall back at all.
+  ///
+  /// Note: this is called directly from widget `build()`/`AnimatedBuilder`
+  /// callbacks that listen to this same service, so the migration below must
+  /// NOT call [notifyListeners] — doing so would trigger a rebuild while one
+  /// is already in progress. The caller already gets the correct value from
+  /// this call; other listeners self-heal the same way on their next build.
   NodeSettings forDevice(N2kDeviceInfo device) {
-    return _byKey[nodeSettingsKey(device)] ?? NodeSettings.empty;
+    final key = nodeSettingsKey(device);
+    final existing = _byKey[key];
+    if (existing != null) return existing;
+
+    final fallbackKey = 'src:${device.sourceAddress}';
+    if (key != fallbackKey) {
+      final legacy = _byKey[fallbackKey];
+      if (legacy != null) {
+        _byKey[key] = legacy;
+        _byKey.remove(fallbackKey);
+        unawaited(_persist());
+        return legacy;
+      }
+    }
+    return NodeSettings.empty;
   }
 
   /// Save (or clear) settings for [device]. When [settings] is empty the
@@ -60,6 +87,13 @@ class NodeSettingsService extends ChangeNotifier {
       _byKey.remove(key);
     } else {
       _byKey[key] = settings;
+    }
+    // Drop any leftover entry under the src-address fallback key now that
+    // we're saving under the stable NAME-based key, so it can't linger as
+    // an orphaned duplicate that forDevice() would otherwise migrate later.
+    final fallbackKey = 'src:${device.sourceAddress}';
+    if (key != fallbackKey) {
+      _byKey.remove(fallbackKey);
     }
     notifyListeners();
     await _persist();
