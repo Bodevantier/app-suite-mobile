@@ -165,6 +165,7 @@ class _AppHomePageState extends State<AppHomePage> {
       dependencies.appSetupController,
       dependencies.bleGatewayController,
       dependencies.autoConnectService,
+      dependencies.demoMode,
     ]);
     _listenable!.addListener(_onSourceChanged);
     // Re-evaluate device freshness periodically so cards flip to "offline"
@@ -264,7 +265,7 @@ class _AppHomePageState extends State<AppHomePage> {
                 onPressed: () {
                   Navigator.of(context).push(
                     MaterialPageRoute<void>(
-                      builder: (_) => const AboutPage(),
+                      builder: (_) => AboutPage(demoMode: dependencies.demoMode),
                     ),
                   );
                 },
@@ -282,6 +283,7 @@ class _AppHomePageState extends State<AppHomePage> {
                         autoConnectService:
                             dependencies.autoConnectService,
                         preferences: dependencies.preferences,
+                        demoModeActive: dependencies.demoMode.isActive,
                       ),
                     ),
                   );
@@ -292,6 +294,8 @@ class _AppHomePageState extends State<AppHomePage> {
           ),
           body: Column(
             children: [
+              if (dependencies.demoMode.isActive)
+                _DemoModeBanner(onTurnOff: dependencies.demoMode.disable),
               // ── Body ──────────────────────────────────────────────────
               Expanded(
                 child: Padding(
@@ -509,6 +513,56 @@ class _AppHomePageState extends State<AppHomePage> {
           ),
         );
       },
+    );
+  }
+}
+
+// ── Demo mode banner ─────────────────────────────────────────────────────────
+
+/// Sits above the device list whenever Demo Mode is active, so simulated
+/// data is never mistaken for a real boat's readings.
+class _DemoModeBanner extends StatelessWidget {
+  const _DemoModeBanner({required this.onTurnOff});
+
+  final VoidCallback onTurnOff;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Material(
+      color: cs.primaryContainer,
+      child: InkWell(
+        onTap: onTurnOff,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(
+            children: [
+              Icon(Icons.theater_comedy_outlined,
+                  size: 18, color: cs.onPrimaryContainer),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Demo Mode — showing simulated data',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                    color: cs.onPrimaryContainer,
+                  ),
+                ),
+              ),
+              Text(
+                'Turn off',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                  color: cs.onPrimaryContainer,
+                  decoration: TextDecoration.underline,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

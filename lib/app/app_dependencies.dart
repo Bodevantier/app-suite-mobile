@@ -5,6 +5,7 @@ import '../ble/services/auto_connect_service.dart';
 import '../ble/services/ble_gateway_transport.dart';
 import '../controllers/app_setup_controller.dart';
 import '../controllers/ble_controller.dart';
+import '../demo/demo_mode_controller.dart';
 import '../services/app_preferences_service.dart';
 import '../services/node_settings_service.dart';
 import '../services/wind_averages_service.dart';
@@ -18,6 +19,7 @@ class AppDependencies {
     required this.autoConnectService,
     required this.windAverages,
     required this.nodeSettings,
+    required this.demoMode,
   });
 
   static Future<AppDependencies> standard() async {
@@ -91,19 +93,27 @@ class AppDependencies {
       autoConnectService.start(knownGatewayId);
     }
 
+    final bleGatewayController = BleGatewayController(
+      transport: transport,
+      repository: repository,
+      telemetryController: telemetryController,
+      preferences: preferences,
+    );
+
     return AppDependencies(
       preferences: preferences,
       appSetupController: AppSetupController(preferences: preferences),
       telemetryController: telemetryController,
-      bleGatewayController: BleGatewayController(
-        transport: transport,
-        repository: repository,
-        telemetryController: telemetryController,
-        preferences: preferences,
-      ),
+      bleGatewayController: bleGatewayController,
       autoConnectService: autoConnectService,
       windAverages: windAverages,
       nodeSettings: nodeSettings,
+      demoMode: DemoModeController(
+        bleGatewayController: bleGatewayController,
+        telemetryController: telemetryController,
+        autoConnectService: autoConnectService,
+        preferences: preferences,
+      ),
     );
   }
 
@@ -114,4 +124,5 @@ class AppDependencies {
   final AutoConnectService autoConnectService;
   final WindAveragesService windAverages;
   final NodeSettingsService nodeSettings;
+  final DemoModeController demoMode;
 }
