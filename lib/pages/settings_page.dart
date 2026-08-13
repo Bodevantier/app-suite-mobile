@@ -5,7 +5,9 @@ import '../ble/controllers/ble_gateway_controller.dart';
 import '../ble/services/auto_connect_service.dart';
 import '../demo/demo_mode_controller.dart';
 import '../services/app_preferences_service.dart';
+import '../services/dashboard_layout_service.dart';
 import '../services/night_mode_service.dart';
+import '../widgets/demo_mode_card.dart';
 import 'about_page.dart';
 import 'ble_connection_page.dart';
 
@@ -20,6 +22,7 @@ class SettingsPage extends StatelessWidget {
     required this.bleGatewayController,
     required this.autoConnectService,
     required this.preferences,
+    required this.dashboards,
   });
 
   final NightModeService nightMode;
@@ -27,6 +30,7 @@ class SettingsPage extends StatelessWidget {
   final BleGatewayController bleGatewayController;
   final AutoConnectService autoConnectService;
   final AppPreferencesService preferences;
+  final DashboardLayoutService dashboards;
 
   @override
   Widget build(BuildContext context) {
@@ -41,6 +45,11 @@ class SettingsPage extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           AnimatedBuilder(
+            animation: dashboards,
+            builder: (context, _) => _DashboardSwitchingCard(dashboards: dashboards),
+          ),
+          const SizedBox(height: 12),
+          AnimatedBuilder(
             animation: Listenable.merge([bleGatewayController, autoConnectService]),
             builder: (context, _) => _BluetoothCard(
               bleGatewayController: bleGatewayController,
@@ -49,6 +58,8 @@ class SettingsPage extends StatelessWidget {
               demoMode: demoMode,
             ),
           ),
+          const SizedBox(height: 12),
+          DemoModeCard(demoMode: demoMode),
           const SizedBox(height: 12),
           Card(
             elevation: 0,
@@ -161,6 +172,75 @@ class _BluetoothCard extends StatelessWidget {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+class _DashboardSwitchingCard extends StatelessWidget {
+  const _DashboardSwitchingCard({required this.dashboards});
+
+  final DashboardLayoutService dashboards;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: cs.outline.withValues(alpha: 0.2)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.dashboard_customize_outlined, color: cs.primary),
+                const SizedBox(width: 10),
+                const Text(
+                  'Dashboard switching',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Choose whether the home page switches dashboards only when you '
+              'swipe, or automatically based on engine RPM and speed.',
+              style: TextStyle(fontSize: 12, color: cs.onSurface.withValues(alpha: 0.6)),
+            ),
+            const SizedBox(height: 14),
+            SegmentedButton<DashboardSwitchMode>(
+              segments: const [
+                ButtonSegment(
+                  value: DashboardSwitchMode.manual,
+                  label: Text('Manual'),
+                  icon: Icon(Icons.swipe),
+                ),
+                ButtonSegment(
+                  value: DashboardSwitchMode.auto,
+                  label: Text('Auto'),
+                  icon: Icon(Icons.auto_mode),
+                ),
+              ],
+              selected: {dashboards.switchMode},
+              onSelectionChanged: (selection) =>
+                  dashboards.setSwitchMode(selection.first),
+            ),
+            if (dashboards.switchMode == DashboardSwitchMode.auto) ...[
+              const SizedBox(height: 10),
+              Text(
+                'Auto mode detects Motoring and Sailing from live telemetry. It '
+                'can\'t tell Anchored apart from Docked (no shore-power sensor) — '
+                'if you tag dashboards with both, whichever comes first is used.',
+                style: TextStyle(fontSize: 11.5, color: cs.onSurface.withValues(alpha: 0.5)),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }

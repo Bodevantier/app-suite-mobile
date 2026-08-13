@@ -16,6 +16,19 @@ import '../controllers/ble_controller.dart';
 import '../n2k/models/n2k_frame.dart';
 import 'n2k_wire_format.dart';
 
+/// Fixed source addresses for each simulated device — public so
+/// [seedDefaultDemoDashboards] can bind dashboard tiles to specific demo
+/// devices directly, without waiting on/parsing decoded telemetry first.
+class DemoDeviceSrc {
+  static const int wind = 10;
+  static const int engineTemp = 11;
+  static const int fridgeTemp = 12;
+  static const int fuelTank = 13;
+  static const int waterTank = 14;
+  static const int engine = 15;
+  static const int gps = 16;
+}
+
 class _DemoDevice {
   const _DemoDevice({
     required this.src,
@@ -47,17 +60,17 @@ class DemoDataService {
   static const int _manufacturerCode = 717; // fictitious "SDolve Marine" code
 
   static const _wind = _DemoDevice(
-    src: 10,
+    src: DemoDeviceSrc.wind,
     deviceClass: 85, // Environmental
     deviceFunction: 130, // Wind
-    model: 'MastAir 200 Wind Sensor',
+    model: 'SDolve Wind',
     mfrText: 'SDolve Marine',
     serial: 'SDW-104829',
     softwareVersion: '1.4.2',
     modelVersion: 'Rev B',
   );
   static const _tempEngine = _DemoDevice(
-    src: 11,
+    src: DemoDeviceSrc.engineTemp,
     deviceClass: 85,
     deviceFunction: 160, // Temperature
     model: 'EnviroTemp Engine Bay',
@@ -67,7 +80,7 @@ class DemoDataService {
     modelVersion: 'Rev A',
   );
   static const _tempFridge = _DemoDevice(
-    src: 12,
+    src: DemoDeviceSrc.fridgeTemp,
     deviceClass: 85,
     deviceFunction: 160,
     model: 'EnviroTemp Fridge',
@@ -77,7 +90,7 @@ class DemoDataService {
     modelVersion: 'Rev A',
   );
   static const _fuelTank = _DemoDevice(
-    src: 13,
+    src: DemoDeviceSrc.fuelTank,
     deviceClass: 80, // Instrumentation
     deviceFunction: 150, // Fluid level sender (project convention)
     model: 'FuelWatch 200 Tank Sender',
@@ -87,7 +100,7 @@ class DemoDataService {
     modelVersion: 'Rev C',
   );
   static const _waterTank = _DemoDevice(
-    src: 14,
+    src: DemoDeviceSrc.waterTank,
     deviceClass: 80,
     deviceFunction: 150,
     model: 'AquaWatch 300 Tank Sender',
@@ -97,7 +110,7 @@ class DemoDataService {
     modelVersion: 'Rev C',
   );
   static const _engine = _DemoDevice(
-    src: 15,
+    src: DemoDeviceSrc.engine,
     deviceClass: 40, // Propulsion
     deviceFunction: 160,
     model: 'Engine Data Interface',
@@ -107,7 +120,7 @@ class DemoDataService {
     modelVersion: 'Rev A',
   );
   static const _gps = _DemoDevice(
-    src: 16,
+    src: DemoDeviceSrc.gps,
     deviceClass: 50, // Navigation
     deviceFunction: 145, // GPS
     model: 'NavPilot GPS/Compass',
@@ -214,6 +227,7 @@ class DemoDataService {
         _fluidFrame(_fuelTank, typeCode: 0, levelPct: _fuelLevelPct(), capacityL: 200),
         _fluidFrame(_waterTank, typeCode: 1, levelPct: _waterLevelPct(), capacityL: 300),
         _engineFrame(),
+        _batteryFrame(),
         _positionFrame(),
         _cogSogFrame(),
         _headingFrame(),
@@ -326,6 +340,28 @@ class DemoDataService {
         0xff, 0xff, // boost pressure: not available
         0x00, // trim
         0xff, 0xff, // reserved
+      ],
+    );
+  }
+
+  // Starter/house battery voltage, slowly drifting as if under a light load
+  // with the odd small sag — reported by the engine data interface, which
+  // is a common real-world pairing (SmartCraft-style gateways often surface
+  // both engine parameters and battery voltage from the same source).
+  double _batteryVoltage() =>
+      (12.6 + 0.5 * math.sin(_t / 210) + _jitter(0.05)).clamp(11.8, 14.4);
+
+  N2kFrame _batteryFrame() {
+    final voltRaw = (_batteryVoltage() * 100).round() & 0xffff;
+    return singleFrame(
+      pgn: 127508,
+      source: _engine.src,
+      data: [
+        0, // DC instance
+        ...le16(voltRaw),
+        0xff, 0xff, // current: not available
+        0xff, 0xff, // temperature: not available
+        0xff, // SID
       ],
     );
   }

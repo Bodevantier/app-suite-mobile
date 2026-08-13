@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../controllers/ble_controller.dart';
 import '../models/n2k_device_info.dart';
 import '../models/node_settings.dart';
+import '../n2k/fluid_icons.dart';
 import '../services/node_settings_service.dart';
 import 'node_settings_page.dart';
 
@@ -229,7 +230,7 @@ class _FluidLevelCard extends StatelessWidget {
     }
 
     final pct = levelPct!.clamp(0.0, 100.0);
-    final liquidColor = _colorForFluid(fluidType);
+    final liquidColor = colorForFluidType(fluidType);
     // Approximate volume (L) when capacity is known.
     final volumeL = (capacityL != null) ? (capacityL! * pct / 100.0) : null;
 
@@ -306,25 +307,6 @@ class _FluidLevelCard extends StatelessWidget {
     );
   }
 
-  static Color _colorForFluid(String? type) {
-    switch (type?.toLowerCase()) {
-      case 'fuel':
-      case 'fuel gasoline':
-        return const Color(0xffd97706); // amber
-      case 'water':
-        return const Color(0xff2563eb); // blue
-      case 'gray water':
-        return const Color(0xff64748b);
-      case 'black water':
-        return const Color(0xff1f2937);
-      case 'live well':
-        return const Color(0xff0891b2);
-      case 'oil':
-        return const Color(0xff854d0e);
-      default:
-        return const Color(0xff2563eb);
-    }
-  }
 }
 
 /// Stylised tank with an animated fill level. The fill height is animated

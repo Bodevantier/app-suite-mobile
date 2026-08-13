@@ -4,6 +4,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import '../app/build_info.dart';
 import '../demo/demo_mode_controller.dart';
+import '../widgets/demo_mode_card.dart';
 
 /// General info about the app itself — version and the git revision it was
 /// built from. Separate from per-device settings (reached from each node's
@@ -26,14 +27,6 @@ class _AboutPageState extends State<AboutPage> {
     PackageInfo.fromPlatform().then((info) {
       if (mounted) setState(() => _packageInfo = info);
     });
-  }
-
-  Future<void> _onDemoModeChanged(bool value) async {
-    if (value) {
-      await widget.demoMode.enable();
-    } else {
-      widget.demoMode.disable();
-    }
   }
 
   String _diagnosticsText() {
@@ -106,13 +99,7 @@ Commit date: ${BuildInfo.gitCommitDate}
             ),
           ),
           const SizedBox(height: 24),
-          AnimatedBuilder(
-            animation: widget.demoMode,
-            builder: (context, _) => _DemoModeCard(
-              active: widget.demoMode.isActive,
-              onChanged: _onDemoModeChanged,
-            ),
-          ),
+          DemoModeCard(demoMode: widget.demoMode),
           const SizedBox(height: 12),
           _SectionCard(
             title: 'Software revision',
@@ -158,52 +145,6 @@ Commit date: ${BuildInfo.gitCommitDate}
     String two(int n) => n.toString().padLeft(2, '0');
     return '${local.year}-${two(local.month)}-${two(local.day)} '
         '${two(local.hour)}:${two(local.minute)}';
-  }
-}
-
-/// Lets the user simulate a fully connected boat — every sensor, every
-/// screen — without a real gateway nearby. Off by default and never
-/// persisted: it always starts off on a fresh launch.
-class _DemoModeCard extends StatelessWidget {
-  const _DemoModeCard({required this.active, required this.onChanged});
-
-  final bool active;
-  final ValueChanged<bool> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Card(
-      elevation: 0,
-      color: active ? cs.primaryContainer.withValues(alpha: 0.35) : null,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: active
-              ? cs.primary.withValues(alpha: 0.4)
-              : cs.outline.withValues(alpha: 0.2),
-        ),
-      ),
-      child: SwitchListTile(
-        value: active,
-        onChanged: onChanged,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-        secondary: Icon(
-          Icons.theater_comedy_outlined,
-          color: active ? cs.primary : cs.onSurface.withValues(alpha: 0.6),
-        ),
-        title: const Text(
-          'Demo Mode',
-          style: TextStyle(fontWeight: FontWeight.w700),
-        ),
-        subtitle: Text(
-          active
-              ? 'Showing simulated wind, temperature, tank and engine data — turn off to use a real gateway.'
-              : 'See every screen with simulated sensors — no gateway required.',
-          style: TextStyle(fontSize: 12, color: cs.onSurface.withValues(alpha: 0.7)),
-        ),
-      ),
-    );
   }
 }
 

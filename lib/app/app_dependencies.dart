@@ -5,8 +5,10 @@ import '../ble/services/auto_connect_service.dart';
 import '../ble/services/ble_gateway_transport.dart';
 import '../controllers/app_setup_controller.dart';
 import '../controllers/ble_controller.dart';
+import '../dashboard/auto_mode_detector.dart';
 import '../demo/demo_mode_controller.dart';
 import '../services/app_preferences_service.dart';
+import '../services/dashboard_layout_service.dart';
 import '../services/night_mode_service.dart';
 import '../services/node_settings_service.dart';
 import '../services/temperature_history_service.dart';
@@ -26,11 +28,14 @@ class AppDependencies {
     required this.nodeSettings,
     required this.demoMode,
     required this.nightMode,
+    required this.dashboards,
+    required this.autoModeDetector,
   });
 
   static Future<AppDependencies> standard() async {
     final preferences = await AppPreferencesService.load();
     final nodeSettings = await NodeSettingsService.load();
+    final dashboards = await DashboardLayoutService.load();
 
     final telemetryController = BleController();
     final repository = BleGatewayRepository();
@@ -148,6 +153,7 @@ class AppDependencies {
         telemetryController: telemetryController,
         autoConnectService: autoConnectService,
         preferences: preferences,
+        dashboards: dashboards,
       ),
       // Constructing this only loads persisted state (no I/O, no location
       // request) — safe to build in the headless BLE-wake isolate too.
@@ -155,6 +161,8 @@ class AppDependencies {
       // recheck loop / location refresh, and must only be called by the
       // visible app (see BleGatewayApp).
       nightMode: NightModeService(preferences: preferences),
+      dashboards: dashboards,
+      autoModeDetector: AutoModeDetector(telemetryController: telemetryController),
     );
   }
 
@@ -169,4 +177,6 @@ class AppDependencies {
   final NodeSettingsService nodeSettings;
   final DemoModeController demoMode;
   final NightModeService nightMode;
+  final DashboardLayoutService dashboards;
+  final AutoModeDetector autoModeDetector;
 }
