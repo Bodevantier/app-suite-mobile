@@ -5,13 +5,13 @@
 /// the About page. Refreshed automatically by the post-commit
 /// hook — see .git/hooks/post-commit.
 class BuildInfo {
-  static const int gitCommitCount = 28;
-  static const String gitCommit = 'de62709';
-  static const String gitCommitFull = 'de62709226714ac292682a2d701ca342d7821385';
-  static const String gitCommitSubject = 'Refresh build info snapshot';
-  static const String gitCommitDate = '2026-08-13T12:53:30+02:00';
+  static const int gitCommitCount = 29;
+  static const String gitCommit = '3f7d28b';
+  static const String gitCommitFull = '3f7d28b2cd0fe7e32222090de58bd4ca2ae8cb4e';
+  static const String gitCommitSubject = 'Add configurable dashboard home page';
+  static const String gitCommitDate = '2026-08-13T15:56:10+02:00';
   static const String gitBranch = 'main';
-  static const String gitDescribe = 'known-good-2026-04-11-27-gde62709';
+  static const String gitDescribe = 'known-good-2026-04-11-28-g3f7d28b';
   static const bool gitDirty = false;
-  static const String generatedAt = '2026-08-13T10:53:32.246087Z';
+  static const String generatedAt = '2026-08-13T13:56:12.233995Z';
 }
