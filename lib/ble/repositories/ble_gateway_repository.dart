@@ -236,7 +236,20 @@ class BleGatewayRepository extends ChangeNotifier {
     // (complete=0) when the SPI queue was previously undersized; we still want
     // to show whatever devices we have rather than showing stale cached data.
     if (dedupedDevices.isNotEmpty) {
-      if (snapshot.snapshotComplete) {
+      // `complete=true` on the header only means the STM32's own bus scan is
+      // done — it's sent before any "device ..." detail lines cross the BLE
+      // link, and stays true (carried through copyWith) while they trickle in
+      // one at a time. Treating it as "all device lines are in" caused every
+      // periodic re-poll to replace _devices with just the first device the
+      // instant its line arrived (dropping every other known device for a
+      // frame), then grow back as the rest arrived — the home page cards
+      // flashing out and back in on every snapshot. Only do the full replace
+      // once we've actually received as many device lines as the header said
+      // to expect.
+      final expected = snapshot.snapshotExpected;
+      final haveAllExpectedDevices =
+          expected == null || dedupedDevices.length >= expected;
+      if (snapshot.snapshotComplete && haveAllExpectedDevices) {
         // Full snapshot received: replace the device list entirely.
         _devices = dedupedDevices;
       } else {
