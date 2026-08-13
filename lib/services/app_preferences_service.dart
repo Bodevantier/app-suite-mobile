@@ -29,6 +29,10 @@ class AppPreferencesService {
   static const _keyWindAwsSamples = 'wind_aws_samples';
   static const _keyWindSession = 'wind_session';
   static const _keyTempRecords = 'temp_records';
+  static const _keyNightModeSetting = 'night_mode_setting';
+  static const _keyNightModeLat = 'night_mode_last_lat';
+  static const _keyNightModeLon = 'night_mode_last_lon';
+  static const _keyNightModeFixAt = 'night_mode_last_fix_at';
 
   // ── factory ──────────────────────────────────────────────────────────────
 
@@ -213,6 +217,39 @@ class AppPreferencesService {
 
   Future<void> saveTempRecords(Map<String, dynamic> records) async {
     await _prefs.setString(_keyTempRecords, jsonEncode(records));
+  }
+
+  // ── night mode ────────────────────────────────────────────────────────────
+  // 'auto' follows local sunrise/sunset computed from the last cached
+  // position; 'on'/'off' are manual overrides. Position is refreshed rarely
+  // (see NightModeService) purely to save battery — sunrise/sunset barely
+  // moves for small position changes.
+
+  String get nightModeSetting => _prefs.getString(_keyNightModeSetting) ?? 'auto';
+
+  Future<void> saveNightModeSetting(String value) =>
+      _prefs.setString(_keyNightModeSetting, value);
+
+  double? get nightModeLastLatitude => _prefs.getDouble(_keyNightModeLat);
+
+  double? get nightModeLastLongitude => _prefs.getDouble(_keyNightModeLon);
+
+  DateTime? get nightModeLastFixAt {
+    final raw = _prefs.getString(_keyNightModeFixAt);
+    if (raw == null) return null;
+    return DateTime.tryParse(raw);
+  }
+
+  Future<void> saveNightModePosition({
+    required double latitude,
+    required double longitude,
+    required DateTime fixAt,
+  }) async {
+    await Future.wait([
+      _prefs.setDouble(_keyNightModeLat, latitude),
+      _prefs.setDouble(_keyNightModeLon, longitude),
+      _prefs.setString(_keyNightModeFixAt, fixAt.toUtc().toIso8601String()),
+    ]);
   }
 
   // ── clear ─────────────────────────────────────────────────────────────────

@@ -4,17 +4,18 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../models/n2k_device_info.dart';
-import '../pages/about_page.dart';
 import '../pages/ble_connection_page.dart';
 import '../pages/n2k_device_detail_page.dart';
 import '../pages/navigation_data_page.dart';
 import '../pages/temperature_data_page.dart';
 import '../pages/fluid_level_data_page.dart';
 import '../pages/engine_data_page.dart';
+import '../pages/settings_page.dart';
 import '../pages/welcome_page.dart';
 import '../pages/wind_data_page.dart';
 import '../services/node_settings_service.dart';
 import '../controllers/ble_controller.dart';
+import '../widgets/night_mode_filter.dart';
 import 'app_dependencies.dart';
 
 class BleGatewayApp extends StatefulWidget {
@@ -33,6 +34,10 @@ class _BleGatewayAppState extends State<BleGatewayApp>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _startAutoConnectIfKnown();
+    // Only the visible app should ever start Night Mode's recheck/location
+    // loop — never the headless BLE-wake isolate in main.dart, which has no
+    // UI and nothing to theme.
+    widget.dependencies.nightMode.startForeground();
   }
 
   void _startAutoConnectIfKnown() {
@@ -53,6 +58,7 @@ class _BleGatewayAppState extends State<BleGatewayApp>
   @override
   void dispose() {
     widget.dependencies.autoConnectService.dispose();
+    widget.dependencies.nightMode.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -65,6 +71,9 @@ class _BleGatewayAppState extends State<BleGatewayApp>
       // Returning to the app should feel instant — don't wait on whatever
       // passive reconnect state happens to already be in flight.
       _startAutoConnectIfKnown();
+      // The OS may have throttled our timer while backgrounded — re-check
+      // right away rather than waiting up to a minute.
+      widget.dependencies.nightMode.recheckNow();
     }
   }
 
@@ -74,6 +83,10 @@ class _BleGatewayAppState extends State<BleGatewayApp>
       title: 'ESP32 BLE Gateway',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
+      ),
+      builder: (context, child) => NightModeFilter(
+        nightMode: widget.dependencies.nightMode,
+        child: child!,
       ),
       home: RootPage(dependencies: widget.dependencies),
     );
@@ -259,18 +272,7 @@ class _AppHomePageState extends State<AppHomePage> {
           appBar: AppBar(
             title: const Text('Home'),
             actions: [
-              IconButton(
-                tooltip: 'About',
-                icon: const Icon(Icons.info_outline),
-                onPressed: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => AboutPage(demoMode: dependencies.demoMode),
-                    ),
-                  );
-                },
-              ),
-              _GatewayStatusIcon(
+              _GatewayStatusChip(
                 isConnected: isConnected,
                 isConnecting: isConnecting,
                 lastChunkAt:
@@ -289,7 +291,25 @@ class _AppHomePageState extends State<AppHomePage> {
                   );
                 },
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 4),
+              IconButton(
+                tooltip: 'Settings',
+                icon: const Icon(Icons.settings_outlined),
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => SettingsPage(
+                        nightMode: dependencies.nightMode,
+                        demoMode: dependencies.demoMode,
+                        bleGatewayController: dependencies.bleGatewayController,
+                        autoConnectService: dependencies.autoConnectService,
+                        preferences: dependencies.preferences,
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(width: 4),
             ],
           ),
           body: Column(
@@ -941,8 +961,14 @@ class _OfflineDismissBackground extends StatelessWidget {
   }
 }
 
-class _GatewayStatusIcon extends StatefulWidget {
-  const _GatewayStatusIcon({
+/// Compact, always-visible connection status pill shown on the Home app bar
+/// — glanceable at a distance (helm, cockpit) without needing to open
+/// Settings. Tapping it still jumps straight to [BleConnectionPage], since
+/// that's the fastest path when something needs fixing; the same page is
+/// also reachable from Settings for discoverability/consistency with the
+/// app's other secondary screens.
+class _GatewayStatusChip extends StatefulWidget {
+  const _GatewayStatusChip({
     required this.isConnected,
     required this.isConnecting,
     required this.lastChunkAt,
@@ -955,10 +981,10 @@ class _GatewayStatusIcon extends StatefulWidget {
   final VoidCallback onTap;
 
   @override
-  State<_GatewayStatusIcon> createState() => _GatewayStatusIconState();
+  State<_GatewayStatusChip> createState() => _GatewayStatusChipState();
 }
 
-class _GatewayStatusIconState extends State<_GatewayStatusIcon>
+class _GatewayStatusChipState extends State<_GatewayStatusChip>
     with SingleTickerProviderStateMixin {
   static const Duration _staleAfter = Duration(seconds: 6);
   static const Duration _pulsePeriod = Duration(milliseconds: 2200);

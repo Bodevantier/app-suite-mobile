@@ -39,6 +39,7 @@ dependencies:
   flutter_blue_plus: ^2.2.1
   lottie: ^3.1.2
   package_info_plus: ^8.1.2
+  geolocator: ^14.0.2
 
 dev_dependencies:
   flutter_test:

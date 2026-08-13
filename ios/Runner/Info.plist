@@ -52,7 +52,7 @@
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>This app uses Bluetooth to discover and connect to BLE peripherals.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Location permission is required by iOS for BLE scanning.</string>
+	<string>Location is used for BLE scanning and, if you enable Night Mode, to work out local sunrise/sunset so the app can switch themes automatically.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>

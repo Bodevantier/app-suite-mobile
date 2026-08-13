@@ -7,6 +7,7 @@ import '../controllers/app_setup_controller.dart';
 import '../controllers/ble_controller.dart';
 import '../demo/demo_mode_controller.dart';
 import '../services/app_preferences_service.dart';
+import '../services/night_mode_service.dart';
 import '../services/node_settings_service.dart';
 import '../services/temperature_history_service.dart';
 import '../services/wind_angle_history_service.dart';
@@ -24,6 +25,7 @@ class AppDependencies {
     required this.windAngleHistory,
     required this.nodeSettings,
     required this.demoMode,
+    required this.nightMode,
   });
 
   static Future<AppDependencies> standard() async {
@@ -147,6 +149,12 @@ class AppDependencies {
         autoConnectService: autoConnectService,
         preferences: preferences,
       ),
+      // Constructing this only loads persisted state (no I/O, no location
+      // request) — safe to build in the headless BLE-wake isolate too.
+      // NightModeService.startForeground() is what actually starts the
+      // recheck loop / location refresh, and must only be called by the
+      // visible app (see BleGatewayApp).
+      nightMode: NightModeService(preferences: preferences),
     );
   }
 
@@ -160,4 +168,5 @@ class AppDependencies {
   final WindAngleHistoryService windAngleHistory;
   final NodeSettingsService nodeSettings;
   final DemoModeController demoMode;
+  final NightModeService nightMode;
 }
