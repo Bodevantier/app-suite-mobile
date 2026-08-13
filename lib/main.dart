@@ -43,8 +43,14 @@ void backgroundConnectMain() async {
 }
 
 /// Shows the splash animation while dependencies load in the background.
-/// Transitions to [BleGatewayApp] once both the animation is done AND
-/// dependencies are ready (whichever takes longer).
+/// Transitions to [BleGatewayApp] once both the splash's brief minimum
+/// display time AND dependencies are ready (whichever takes longer — in
+/// practice almost always the splash, since dependency loading is just fast
+/// local-storage reads). The BLE reconnect itself is not awaited here — it
+/// keeps running after the transition, surfaced live on the Home page.
+///
+/// The swap itself is a crossfade rather than an instant cut — jumping
+/// straight from the branded splash to the home page felt jarring.
 class _AppLoader extends StatefulWidget {
   const _AppLoader({required this.dependenciesFuture});
 
@@ -55,6 +61,8 @@ class _AppLoader extends StatefulWidget {
 }
 
 class _AppLoaderState extends State<_AppLoader> {
+  static const Duration _transitionDuration = Duration(milliseconds: 400);
+
   AppDependencies? _dependencies;
   bool _splashDone = false;
 
@@ -71,16 +79,25 @@ class _AppLoaderState extends State<_AppLoader> {
   @override
   Widget build(BuildContext context) {
     final deps = _dependencies;
-    if (_splashDone && deps != null) {
-      return BleGatewayApp(dependencies: deps);
-    }
-    // Keep showing the splash until both conditions are met.
-    // If the animation finishes before deps load, show a plain white screen.
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      home: _splashDone
-          ? const Scaffold(backgroundColor: Colors.white)
-          : SplashScreen(onFinished: _onSplashDone),
+    final ready = _splashDone && deps != null;
+    return AnimatedSwitcher(
+      duration: _transitionDuration,
+      child: ready
+          ? BleGatewayApp(key: const ValueKey('home'), dependencies: deps)
+          // Keep showing the splash until both conditions are met. If the
+          // splash's minimum display time elapses before deps load (rare —
+          // deps are just local-storage reads), show a spinner rather than a
+          // blank screen so there's never a moment with no feedback at all.
+          : MaterialApp(
+              key: ValueKey(_splashDone ? 'loading' : 'splash'),
+              debugShowCheckedModeBanner: false,
+              home: _splashDone
+                  ? const Scaffold(
+                      backgroundColor: Colors.white,
+                      body: Center(child: CircularProgressIndicator()),
+                    )
+                  : SplashScreen(onFinished: _onSplashDone),
+            ),
     );
   }
 }
