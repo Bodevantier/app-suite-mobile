@@ -98,18 +98,23 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
     super.initState();
     _wasConnectedOnEntry = widget.controller.isConnected;
     if (widget.demoModeActive) return;
+    // Continuously enforce "should be scanning" any time connection state
+    // changes while this page is open — not just at mount — so a manual
+    // Disconnect (or a dropped connection, or Forget) always brings the
+    // device list back to life instead of leaving it stale/empty.
+    widget.controller.addListener(_syncScanState);
+    widget.autoConnectService.addListener(_syncScanState);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await widget.controller.initialize();
-      if (!mounted) return;
-      if (!widget.controller.isConnected && !widget.controller.isScanning) {
-        unawaited(widget.controller.startScan());
-      }
+      _syncScanState();
     });
     unawaited(_refreshBatteryOptimizationStatus());
   }
 
   @override
   void dispose() {
+    widget.controller.removeListener(_syncScanState);
+    widget.autoConnectService.removeListener(_syncScanState);
     // Standard BLE practice (see Android's own BLE guide): don't leave a
     // scan running once the user isn't looking at the discovery UI anymore
     // — it keeps the radio hot for no benefit. Skip it while a connect
@@ -119,6 +124,64 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
       unawaited(widget.controller.stopScan());
     }
     super.dispose();
+  }
+
+  // Reentrancy guard for _syncScanState — see its doc comment. Crash-tested
+  // fix: without this, this method caused an infinite synchronous recursion
+  // and a real stack-overflow crash on device.
+  bool _syncingScanState = false;
+
+  // Debounce for retrying a *failed* startScan() — see doc comment below.
+  // Crash-tested fix #2: without this, a rejected scan registration (Android
+  // throttles BluetoothLeScanner.startScan to ~5 calls per 30s) caused an
+  // unbounded async retry storm — each failure's own status notification
+  // immediately triggered another attempt, so it never backed off long
+  // enough for Android's throttle window to clear.
+  DateTime? _lastScanAttemptAt;
+  static const _minScanRetryInterval = Duration(seconds: 8);
+
+  /// Single source of truth for "should the radio be scanning right now" —
+  /// re-evaluated on every connection-state change (disconnect, forget, a
+  /// dropped connection, a completed reconnect), not just at page-mount.
+  ///
+  /// Two failure modes had to be guarded against here, both found by
+  /// actually running this on a phone rather than trusting static analysis:
+  ///
+  /// 1. Reentrancy: `BleGatewayTransportService.startScan()` calls
+  ///    `notifyListeners()` (status = 'Scanning...') *before* the native
+  ///    scan actually starts — `isScanning` (`FlutterBluePlus.isScanningNow`)
+  ///    is still `false` at that instant. That notification bubbles straight
+  ///    up through `BleGatewayController._handleDependencyChanged` (which
+  ///    unconditionally re-notifies) to this same listener, which would see
+  ///    `isScanning == false` again and call `startScan()` again —
+  ///    synchronously, before the first call ever returns — recursing until
+  ///    the stack overflows. `_syncingScanState` makes every nested call
+  ///    during that synchronous notification burst a no-op.
+  /// 2. Retry storm: even with (1) fixed, a *failed* scan registration
+  ///    (e.g. Android's own throttling) also calls `notifyListeners()` on
+  ///    the way out of the catch block, in a later, separate (non-nested)
+  ///    call — the reentrancy guard doesn't cover that. Left unthrottled,
+  ///    each failure immediately triggered another attempt, in a tight async
+  ///    loop that kept re-tripping Android's throttle. `_lastScanAttemptAt`
+  ///    caps retries to once per [_minScanRetryInterval].
+  void _syncScanState() {
+    if (!mounted || _syncingScanState) return;
+    _syncingScanState = true;
+    try {
+      final shouldScan = !widget.controller.isConnected;
+      if (shouldScan && !widget.controller.isScanning) {
+        final lastAttempt = _lastScanAttemptAt;
+        final now = DateTime.now();
+        if (lastAttempt == null || now.difference(lastAttempt) >= _minScanRetryInterval) {
+          _lastScanAttemptAt = now;
+          unawaited(widget.controller.startScan());
+        }
+      } else if (!shouldScan && widget.controller.isScanning) {
+        unawaited(widget.controller.stopScan());
+      }
+    } finally {
+      _syncingScanState = false;
+    }
   }
 
   /// Mirrors the "Connecting…" condition used in [build] — AutoConnectService
@@ -140,6 +203,72 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
     // The system dialog is a separate Activity — re-check once we're back
     // in the foreground rather than guessing the outcome.
     if (mounted) unawaited(_refreshBatteryOptimizationStatus());
+  }
+
+  /// Long-press action sheet for one specific device row — makes Forget
+  /// unambiguous by tying it to the device the user is actually holding,
+  /// instead of a single top-of-page button whose target isn't obvious when
+  /// a gateway is already connected. [liveResult] is only available when
+  /// this device currently has a fresh scan result behind it; the saved
+  /// gateway's pinned row can be long-pressed even before/without one, in
+  /// which case Connect falls back to the direct-by-id reconnect path.
+  void _showDeviceActions({
+    required String name,
+    required String id,
+    required bool isKnown,
+    ScanResult? liveResult,
+  }) {
+    final isThisConnected = widget.controller.connectedDevice?.remoteId.str == id;
+
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => _DeviceActionsSheet(
+        name: name,
+        isConnected: isThisConnected,
+        isConnecting: widget.controller.isConnecting,
+        isKnown: isKnown,
+        onConnect: () {
+          Navigator.of(sheetContext).pop();
+          if (liveResult != null) {
+            unawaited(_connect(liveResult));
+          } else {
+            _reconnectKnown();
+          }
+        },
+        onDisconnect: () {
+          Navigator.of(sheetContext).pop();
+          unawaited(_disconnectOrCancel());
+        },
+        onForget: () async {
+          Navigator.of(sheetContext).pop();
+          final confirmed = await showDialog<bool>(
+                context: context,
+                builder: (dialogCtx) => AlertDialog(
+                  title: const Text('Forget this gateway?'),
+                  content: Text(
+                    "$name will be forgotten. You'll need to pick it from "
+                    'Nearby Devices again to reconnect.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(dialogCtx).pop(false),
+                      child: const Text('Cancel'),
+                    ),
+                    FilledButton.tonal(
+                      onPressed: () => Navigator.of(dialogCtx).pop(true),
+                      child: const Text('Forget'),
+                    ),
+                  ],
+                ),
+              ) ??
+              false;
+          if (confirmed) unawaited(_forgetGateway());
+        },
+      ),
+    );
   }
 
   void _showDeviceSheet(ScanResult result) {
@@ -221,15 +350,10 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
     widget.autoConnectService.stop();
     await widget.preferences.saveKnownGatewayId(null);
     await widget.preferences.saveKnownGatewayName(null);
+    // disconnect() firing notifyListeners() is what makes _syncScanState
+    // (attached in initState) bring scanning back — no need to force it here.
     await widget.controller.disconnect();
     if (!mounted) return;
-    // Forgetting clears the known-device id, so tapping it in the Nearby
-    // Devices list becomes the only way back — that list is empty/stale
-    // whenever scanning had already stopped (e.g. it was off the whole time
-    // we were connected), so make sure it's actually populated again.
-    if (!widget.controller.isScanning) {
-      unawaited(widget.controller.startScan());
-    }
     setState(() {});
   }
 
@@ -267,65 +391,92 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
           });
         }
 
+        // The saved gateway is always shown as the first row — live scan
+        // data when we have it, a synthesized entry (no RSSI yet) otherwise
+        // — so there is never a Connect/Disconnect/Forget action whose
+        // target isn't visible on screen.
+        ScanResult? knownResult;
+        if (knownId != null) {
+          for (final result in discovered) {
+            if (result.device.remoteId.str == knownId) {
+              knownResult = result;
+              break;
+            }
+          }
+        }
+        final others =
+            discovered.where((r) => r.device.remoteId.str != knownId).toList();
+        final showOthersSection = others.isNotEmpty || controller.isScanning;
+
         return Scaffold(
           appBar: AppBar(
             title: const Text('Bluetooth'),
             actions: [
               IconButton(
-                tooltip:
-                    controller.isScanning ? 'Stop scanning' : 'Scan for devices',
-                icon: Icon(
-                  controller.isScanning
-                      ? Icons.stop_circle_outlined
-                      : Icons.radar,
-                ),
-                onPressed: controller.isScanning
-                    ? () => unawaited(controller.stopScan())
-                    : () => unawaited(controller.startScan()),
+                tooltip: 'Scan for devices',
+                icon: const Icon(Icons.radar),
+                onPressed: () => unawaited(controller.startScan()),
               ),
             ],
           ),
           body: ListView(
             padding: const EdgeInsets.fromLTRB(16, 20, 16, 32),
             children: [
-              _StatusCard(
-                isConnected: controller.isConnected,
-                isConnecting: isConnecting,
-                isScanning: controller.isScanning,
-                connectedName: connectedName,
-                hasKnownGateway: knownId != null,
-                autoStatus: widget.autoConnectService.status,
-                onDisconnect:
-                    controller.isConnected ? _disconnectOrCancel : null,
-                onCancel: (!controller.isConnected && isConnecting)
-                    ? _disconnectOrCancel
-                    : null,
-                onConnect: (!controller.isConnected &&
-                        !isConnecting &&
-                        knownId != null)
-                    ? _reconnectKnown
-                    : null,
-                onForget: knownId != null ? _forgetGateway : null,
-              ),
+              // One card per gateway concept — not two. Before a gateway is
+              // ever saved, a plain status readout is all there is to show.
+              // Once one is saved, it *is* the status (name, connection
+              // state, signal) plus the connect/disconnect/forget actions,
+              // instead of a redundant summary banner floating above a
+              // second card that repeats the same device's name.
+              if (knownId == null)
+                _StatusCard(
+                  isConnected: controller.isConnected,
+                  isConnecting: isConnecting,
+                  connectedName: connectedName,
+                  hasKnownGateway: false,
+                  autoStatus: widget.autoConnectService.status,
+                )
+              else
+                Builder(builder: (context) {
+                  final result = knownResult;
+                  final pinnedName = result != null
+                      ? _scanResultName(result)
+                      : (widget.preferences.knownGatewayName ?? knownId);
+                  return _KnownGatewayCard(
+                    name: pinnedName,
+                    rssi: result?.rssi,
+                    isConnected: connectedId == knownId,
+                    isConnecting: isConnecting,
+                    autoStatus: widget.autoConnectService.status,
+                    onConnect: result != null
+                        ? () => unawaited(_connect(result))
+                        : _reconnectKnown,
+                    onDisconnect: _disconnectOrCancel,
+                    onTap: result != null ? () => _showDeviceSheet(result) : null,
+                    onLongPress: () => _showDeviceActions(
+                      name: pinnedName,
+                      id: knownId,
+                      isKnown: true,
+                      liveResult: result,
+                    ),
+                  );
+                }),
               if (knownId != null && _ignoringBatteryOptimizations == false) ...[
                 const SizedBox(height: 12),
                 _BatteryOptimizationCard(onEnable: _requestBackgroundReliability),
               ],
-              const SizedBox(height: 28),
-              _SectionHeader(
-                isScanning: controller.isScanning,
-                onScanToggle: controller.isScanning
-                    ? () => unawaited(controller.stopScan())
-                    : () => unawaited(controller.startScan()),
-              ),
-              const SizedBox(height: 10),
-              if (discovered.isEmpty)
+              const SizedBox(height: 24),
+              if (knownId == null && others.isEmpty)
                 _EmptyState(isScanning: controller.isScanning)
-              else
-                ...discovered.map((result) {
+              else if (showOthersSection) ...[
+                _SectionHeader(
+                  title: knownId == null ? 'Nearby Devices' : 'Other Nearby Devices',
+                  isScanning: controller.isScanning,
+                  onRescan: () => unawaited(controller.startScan()),
+                ),
+                const SizedBox(height: 10),
+                ...others.map((result) {
                   final id = result.device.remoteId.str;
-                  final isThisConnected = connectedId == id;
-                  final isKnown = knownId == id;
                   final name = _scanResultName(result);
 
                   return Padding(
@@ -334,15 +485,22 @@ class _BleConnectionPageState extends State<BleConnectionPage> {
                       name: name,
                       id: id,
                       rssi: result.rssi,
-                      isConnected: isThisConnected,
-                      isKnown: isKnown,
-                      isConnecting: controller.isConnecting,
+                      isConnected: connectedId == id,
+                      isKnown: false,
+                      isConnecting: false,
                       onConnect: () => unawaited(_connect(result)),
                       onDisconnect: _disconnectOrCancel,
                       onTap: () => _showDeviceSheet(result),
+                      onLongPress: () => _showDeviceActions(
+                        name: name,
+                        id: id,
+                        isKnown: false,
+                        liveResult: result,
+                      ),
                     ),
                   );
                 }),
+              ],
             ],
           ),
         );
@@ -397,26 +555,16 @@ class _StatusCard extends StatelessWidget {
   const _StatusCard({
     required this.isConnected,
     required this.isConnecting,
-    required this.isScanning,
     required this.connectedName,
     required this.hasKnownGateway,
     required this.autoStatus,
-    required this.onDisconnect,
-    required this.onCancel,
-    required this.onConnect,
-    required this.onForget,
   });
 
   final bool isConnected;
   final bool isConnecting;
-  final bool isScanning;
   final String? connectedName;
   final bool hasKnownGateway;
   final String autoStatus;
-  final VoidCallback? onDisconnect;
-  final VoidCallback? onCancel;
-  final VoidCallback? onConnect;
-  final VoidCallback? onForget;
 
   @override
   Widget build(BuildContext context) {
@@ -452,104 +600,239 @@ class _StatusCard extends StatelessWidget {
       detail = autoStatus.isNotEmpty
           ? autoStatus
           : hasKnownGateway
-              ? 'Tap Connect to reconnect'
+              ? 'Tap your saved gateway below to reconnect'
               : 'Tap a device below to connect';
     }
 
+    // Pure status readout — no buttons. Connect/Disconnect/Forget all live
+    // on the relevant device row below, so there is never an action here
+    // whose target device is ambiguous.
     return Card(
       elevation: 0,
       color: bgColor,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Padding(
         padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Container(
-                  width: 56,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    color: accentColor.withValues(alpha: 0.12),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(icon, color: accentColor, size: 30),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                          color: accentColor,
-                        ),
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        detail,
-                        style: textTheme.bodySmall?.copyWith(
-                          color: accentColor.withValues(alpha: 0.8),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: accentColor.withValues(alpha: 0.12),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: accentColor, size: 30),
             ),
-            if (onDisconnect != null ||
-                onCancel != null ||
-                onConnect != null ||
-                onForget != null) ...[
-              const SizedBox(height: 16),
-              const Divider(height: 1),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (onConnect != null)
-                    FilledButton.icon(
-                      onPressed: onConnect,
-                      icon: const Icon(Icons.link_rounded, size: 18),
-                      label: const Text('Connect'),
+                  Text(
+                    title,
+                    style: textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: accentColor,
                     ),
-                  if (onDisconnect != null)
-                    OutlinedButton.icon(
-                      onPressed: onDisconnect,
-                      icon: const Icon(Icons.link_off_rounded, size: 18),
-                      label: const Text('Disconnect'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: accentColor,
-                        side: BorderSide(color: accentColor.withValues(alpha: 0.5)),
-                      ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    detail,
+                    style: textTheme.bodySmall?.copyWith(
+                      color: accentColor.withValues(alpha: 0.8),
                     ),
-                  if (onCancel != null)
-                    OutlinedButton.icon(
-                      onPressed: onCancel,
-                      icon: const Icon(Icons.close_rounded, size: 18),
-                      label: const Text('Cancel'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: accentColor,
-                        side: BorderSide(color: accentColor.withValues(alpha: 0.5)),
-                      ),
-                    ),
-                  if (onForget != null)
-                    TextButton.icon(
-                      onPressed: onForget,
-                      icon: const Icon(Icons.delete_outline_rounded, size: 18),
-                      label: const Text('Forget'),
-                      style: TextButton.styleFrom(
-                        foregroundColor: colorScheme.onSurfaceVariant,
-                      ),
-                    ),
+                  ),
                 ],
               ),
-            ],
+            ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Known gateway card ───────────────────────────────────────────────────────
+
+/// The single card for the saved gateway — status readout AND the device
+/// row in one, since there's only ever one gateway and a separate summary
+/// banner above it just repeated the same name with inconsistent wording
+/// (e.g. "Connected" up top but a bare signal reading below, with no
+/// indication they're the same device's two halves).
+class _KnownGatewayCard extends StatelessWidget {
+  const _KnownGatewayCard({
+    required this.name,
+    required this.rssi,
+    required this.isConnected,
+    required this.isConnecting,
+    required this.autoStatus,
+    required this.onConnect,
+    required this.onDisconnect,
+    required this.onLongPress,
+    this.onTap,
+  });
+
+  final String name;
+  // Null when we don't have a live scan result behind this device (e.g.
+  // already connected, so it won't show up as a fresh scan result — or
+  // simply not currently in range).
+  final int? rssi;
+  final bool isConnected;
+  final bool isConnecting;
+  final String autoStatus;
+  final VoidCallback onConnect;
+  final VoidCallback onDisconnect;
+  final VoidCallback onLongPress;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
+    final IconData icon;
+    final Color accentColor;
+    final Color bgColor;
+    final Color? borderColor;
+    final String detail;
+
+    if (isConnected) {
+      icon = Icons.bluetooth_connected_rounded;
+      accentColor = Colors.green.shade600;
+      bgColor = Colors.green.shade50;
+      borderColor = Colors.green.shade200;
+      detail = rssi != null
+          ? 'Connected  ·  ${_rssiSignalLabel(rssi!)} signal'
+          : 'Connected';
+    } else if (isConnecting) {
+      icon = Icons.bluetooth_searching_rounded;
+      accentColor = Colors.orange.shade700;
+      bgColor = Colors.orange.shade50;
+      borderColor = Colors.orange.shade200;
+      detail = autoStatus.isNotEmpty ? autoStatus : 'Connecting…';
+    } else {
+      icon = Icons.bluetooth_disabled_rounded;
+      accentColor = colorScheme.onSurfaceVariant;
+      bgColor = colorScheme.surfaceContainerHighest;
+      borderColor = null;
+      detail = rssi != null
+          ? '${_rssiSignalLabel(rssi!)} signal — tap to reconnect'
+          : 'Not currently in range — tap to reconnect';
+    }
+
+    return Card(
+      elevation: isConnected ? 1 : 0,
+      clipBehavior: Clip.antiAlias,
+      color: bgColor,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: borderColor != null
+            ? BorderSide(color: borderColor, width: 1.5)
+            : BorderSide.none,
+      ),
+      child: InkWell(
+        onTap: onTap,
+        onLongPress: onLongPress,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: accentColor.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: accentColor, size: 30),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Name gets the full width to itself — putting the
+                    // "Saved" badge on this line at titleMedium size was
+                    // truncating ordinary-length names (e.g. "SDolve
+                    // Bluetooth" → "SDolve Blue…").
+                    Text(
+                      name,
+                      style: textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: accentColor,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: colorScheme.primaryContainer,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            'Saved',
+                            style: textTheme.labelSmall?.copyWith(
+                              color: colorScheme.onPrimaryContainer,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            detail,
+                            style: textTheme.bodySmall?.copyWith(
+                              color: accentColor.withValues(alpha: 0.8),
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              if (isConnected)
+                IconButton.outlined(
+                  onPressed: onDisconnect,
+                  tooltip: 'Disconnect',
+                  icon: const Icon(Icons.link_off_rounded),
+                  style: IconButton.styleFrom(
+                    foregroundColor: Colors.green.shade700,
+                    side: BorderSide(color: Colors.green.shade300),
+                  ),
+                )
+              else if (isConnecting)
+                // Tappable to cancel — _disconnectOrCancel handles both.
+                InkResponse(
+                  onTap: onDisconnect,
+                  radius: 22,
+                  child: const Padding(
+                    padding: EdgeInsets.all(10),
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2.2),
+                    ),
+                  ),
+                )
+              else
+                IconButton.filled(
+                  onPressed: onConnect,
+                  tooltip: 'Connect',
+                  icon: const Icon(Icons.link_rounded),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -620,12 +903,14 @@ class _BatteryOptimizationCard extends StatelessWidget {
 
 class _SectionHeader extends StatelessWidget {
   const _SectionHeader({
+    required this.title,
     required this.isScanning,
-    required this.onScanToggle,
+    required this.onRescan,
   });
 
+  final String title;
   final bool isScanning;
-  final VoidCallback onScanToggle;
+  final VoidCallback onRescan;
 
   @override
   Widget build(BuildContext context) {
@@ -634,7 +919,7 @@ class _SectionHeader extends StatelessWidget {
       children: [
         Flexible(
           child: Text(
-            'Nearby Devices',
+            title,
             style: Theme.of(context).textTheme.titleSmall?.copyWith(
                   fontWeight: FontWeight.w700,
                   color: colorScheme.onSurfaceVariant,
@@ -668,13 +953,13 @@ class _SectionHeader extends StatelessWidget {
           ),
         ],
         const Spacer(),
+        // No manual "Stop" — scanning while this page is open and not
+        // connected is a standing invariant (_syncScanState), not something
+        // a user toggle should fight. Rescan just forces a fresh burst.
         TextButton.icon(
-          onPressed: onScanToggle,
-          icon: Icon(
-            isScanning ? Icons.stop_rounded : Icons.refresh_rounded,
-            size: 18,
-          ),
-          label: Text(isScanning ? 'Stop' : 'Rescan'),
+          onPressed: onRescan,
+          icon: const Icon(Icons.refresh_rounded, size: 18),
+          label: const Text('Rescan'),
           style: TextButton.styleFrom(
             foregroundColor: colorScheme.primary,
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -744,17 +1029,22 @@ class _GatewayCard extends StatelessWidget {
     required this.onConnect,
     required this.onDisconnect,
     this.onTap,
+    this.onLongPress,
   });
 
   final String name;
   final String id;
-  final int rssi;
+  // Null when this row is the saved gateway shown before/without a live
+  // scan result behind it (e.g. already connected, so it won't show up as
+  // a fresh scan result — or simply not currently in range).
+  final int? rssi;
   final bool isConnected;
   final bool isKnown;
   final bool isConnecting;
   final VoidCallback onConnect;
   final VoidCallback onDisconnect;
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -778,6 +1068,7 @@ class _GatewayCard extends StatelessWidget {
       ),
       child: InkWell(
         onTap: onTap,
+        onLongPress: onLongPress,
         child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         child: Row(
@@ -836,21 +1127,30 @@ class _GatewayCard extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      _RssiBars(rssi: rssi),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          _rssiSignalLabel(rssi),
-                          style: textTheme.bodySmall?.copyWith(
-                            color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+                  if (rssi != null)
+                    Row(
+                      children: [
+                        _RssiBars(rssi: rssi!),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            _rssiSignalLabel(rssi!),
+                            style: textTheme.bodySmall?.copyWith(
+                              color: colorScheme.onSurfaceVariant
+                                  .withValues(alpha: 0.7),
+                            ),
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          overflow: TextOverflow.ellipsis,
                         ),
+                      ],
+                    )
+                  else
+                    Text(
+                      isConnected ? 'Connected' : 'Not currently in range',
+                      style: textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
                       ),
-                    ],
-                  ),
+                    ),
                 ],
               ),
             ),
@@ -865,15 +1165,144 @@ class _GatewayCard extends StatelessWidget {
                   side: BorderSide(color: Colors.green.shade300),
                 ),
               )
+            else if (isConnecting)
+              // Tappable to cancel — _disconnectOrCancel handles both.
+              InkResponse(
+                onTap: onDisconnect,
+                radius: 22,
+                child: const Padding(
+                  padding: EdgeInsets.all(10),
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2.2),
+                  ),
+                ),
+              )
             else
               IconButton.filled(
-                onPressed: isConnecting ? null : onConnect,
+                onPressed: onConnect,
                 tooltip: 'Connect',
                 icon: const Icon(Icons.link_rounded),
               ),
           ],
         ),
       ),
+      ),
+    );
+  }
+}
+
+// ─── Device actions bottom sheet (long-press) ────────────────────────────────
+
+/// Opened by long-pressing a device row in Nearby Devices — a focused
+/// "manage this device" sheet (connect/disconnect + forget), as opposed to
+/// [_DeviceInfoSheet]'s read-only technical details reached by a plain tap.
+class _DeviceActionsSheet extends StatelessWidget {
+  const _DeviceActionsSheet({
+    required this.name,
+    required this.isConnected,
+    required this.isConnecting,
+    required this.isKnown,
+    required this.onConnect,
+    required this.onDisconnect,
+    required this.onForget,
+  });
+
+  final String name;
+  final bool isConnected;
+  final bool isConnecting;
+  final bool isKnown;
+  final VoidCallback onConnect;
+  final VoidCallback onDisconnect;
+  final VoidCallback onForget;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    final iconColor = isConnected ? Colors.green.shade600 : colorScheme.primary;
+
+    return SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Handle bar
+          const SizedBox(height: 12),
+          Container(
+            width: 36,
+            height: 4,
+            decoration: BoxDecoration(
+              color: colorScheme.onSurfaceVariant.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 20),
+          // Icon + name
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              color: iconColor.withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              isConnected
+                  ? Icons.bluetooth_connected_rounded
+                  : Icons.bluetooth_rounded,
+              color: iconColor,
+              size: 28,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Text(
+              name,
+              style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+              textAlign: TextAlign.center,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            isConnected
+                ? 'Connected'
+                : isKnown
+                    ? 'Saved gateway'
+                    : 'Not connected',
+            style: textTheme.bodySmall?.copyWith(
+              color: isConnected
+                  ? Colors.green.shade600
+                  : colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 12),
+          const Divider(height: 1),
+          if (isConnected)
+            ListTile(
+              leading: const Icon(Icons.link_off_rounded),
+              title: const Text('Disconnect'),
+              onTap: onDisconnect,
+            )
+          else
+            ListTile(
+              leading: const Icon(Icons.link_rounded),
+              title: const Text('Connect'),
+              enabled: !isConnecting,
+              onTap: onConnect,
+            ),
+          if (isKnown)
+            ListTile(
+              leading: Icon(Icons.delete_outline_rounded, color: colorScheme.error),
+              title: Text(
+                'Forget device',
+                style: TextStyle(color: colorScheme.error),
+              ),
+              onTap: onForget,
+            ),
+          const SizedBox(height: 12),
+        ],
       ),
     );
   }

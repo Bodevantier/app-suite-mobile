@@ -8,6 +8,8 @@ import '../controllers/ble_controller.dart';
 import '../demo/demo_mode_controller.dart';
 import '../services/app_preferences_service.dart';
 import '../services/node_settings_service.dart';
+import '../services/temperature_history_service.dart';
+import '../services/wind_angle_history_service.dart';
 import '../services/wind_averages_service.dart';
 
 class AppDependencies {
@@ -18,6 +20,8 @@ class AppDependencies {
     required this.preferences,
     required this.autoConnectService,
     required this.windAverages,
+    required this.temperatureHistory,
+    required this.windAngleHistory,
     required this.nodeSettings,
     required this.demoMode,
   });
@@ -82,6 +86,33 @@ class AppDependencies {
       }
     });
 
+    // Temperature log + wind angle trail — app-wide so both keep logging
+    // regardless of which page (if any) is currently open.
+    final temperatureHistory = TemperatureHistoryService();
+    temperatureHistory.seedRecordsFromJson(preferences.tempRecords);
+    final windAngleHistory = WindAngleHistoryService();
+    telemetryController.addListener(() {
+      for (final device in telemetryController.decodedDevices) {
+        if (!device.isTemperatureDevice) continue;
+        final t = telemetryController.telemetryFor(device.sourceAddress);
+        if (t.temperatureC == null) continue;
+        final recordChanged = temperatureHistory.addSample(
+          device.sourceAddress,
+          t.temperatureC!,
+          t.updatedAt ?? DateTime.now(),
+        );
+        if (recordChanged) {
+          preferences.saveTempRecords(temperatureHistory.recordsToJson());
+        }
+      }
+      final t = telemetryController.telemetry;
+      windAngleHistory.addSample(
+        apparentDeg: t.apparentWindAngleDeg,
+        trueDeg: t.effectiveTrueWindAngleDeg,
+        timestamp: t.updatedAt,
+      );
+    });
+
     // Kick off auto-connect right now rather than waiting for BleGatewayApp
     // to mount after the splash screen — dependency construction happens in
     // parallel with the splash animation, so starting the connect attempt
@@ -107,6 +138,8 @@ class AppDependencies {
       bleGatewayController: bleGatewayController,
       autoConnectService: autoConnectService,
       windAverages: windAverages,
+      temperatureHistory: temperatureHistory,
+      windAngleHistory: windAngleHistory,
       nodeSettings: nodeSettings,
       demoMode: DemoModeController(
         bleGatewayController: bleGatewayController,
@@ -123,6 +156,8 @@ class AppDependencies {
   final BleGatewayController bleGatewayController;
   final AutoConnectService autoConnectService;
   final WindAveragesService windAverages;
+  final TemperatureHistoryService temperatureHistory;
+  final WindAngleHistoryService windAngleHistory;
   final NodeSettingsService nodeSettings;
   final DemoModeController demoMode;
 }

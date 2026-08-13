@@ -296,6 +296,24 @@ class _AppHomePageState extends State<AppHomePage> {
             children: [
               if (dependencies.demoMode.isActive)
                 _DemoModeBanner(onTurnOff: dependencies.demoMode.disable),
+              if (isConnecting && !isConnected)
+                _ConnectingBanner(
+                  status: dependencies.autoConnectService.status.isNotEmpty
+                      ? dependencies.autoConnectService.status
+                      : 'Connecting to gateway…',
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => BleConnectionPage(
+                          controller: dependencies.bleGatewayController,
+                          autoConnectService: dependencies.autoConnectService,
+                          preferences: dependencies.preferences,
+                          demoModeActive: dependencies.demoMode.isActive,
+                        ),
+                      ),
+                    );
+                  },
+                ),
               // ── Body ──────────────────────────────────────────────────
               Expanded(
                 child: Padding(
@@ -310,11 +328,13 @@ class _AppHomePageState extends State<AppHomePage> {
                       ),
                       const SizedBox(height: 12),
                       Text(
-                        !isConnected
-                            ? 'Connect to the gateway to see N2K devices.'
-                            : devices.isEmpty
+                        isConnected
+                            ? (devices.isEmpty
                                 ? 'No N2K devices detected on the bus yet.'
-                                : 'Tap a device to view its data.',
+                                : 'Tap a device to view its data.')
+                            : isConnecting
+                                ? 'Connecting to the gateway…'
+                                : 'Connect to the gateway to see N2K devices.',
                       ),
                       const SizedBox(height: 20),
                       Expanded(
@@ -323,7 +343,9 @@ class _AppHomePageState extends State<AppHomePage> {
                                 child: Text(
                                   isConnected
                                       ? 'Waiting for devices...'
-                                      : 'Not connected to gateway.',
+                                      : isConnecting
+                                          ? 'Connecting to gateway…'
+                                          : 'Not connected to gateway.',
                                 ),
                               )
                             : ListView.builder(
@@ -358,6 +380,8 @@ class _AppHomePageState extends State<AppHomePage> {
                                                 device: device,
                                                 telemetryController: dependencies
                                                     .telemetryController,
+                                                temperatureHistory: dependencies
+                                                    .temperatureHistory,
                                                 settingsService:
                                                     dependencies.nodeSettings,
                                               ),
@@ -403,6 +427,8 @@ class _AppHomePageState extends State<AppHomePage> {
                                                 device: device,
                                                 telemetryController: dependencies
                                                     .telemetryController,
+                                                windAngleHistory: dependencies
+                                                    .windAngleHistory,
                                                 windAverages:
                                                     dependencies.windAverages,
                                                 settingsService:
@@ -557,6 +583,51 @@ class _DemoModeBanner extends StatelessWidget {
                   fontSize: 12,
                   color: cs.onPrimaryContainer,
                   decoration: TextDecoration.underline,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Prominent "reconnecting" banner shown on the Home page body while a
+/// known gateway is being auto-connected to — so the user always has
+/// visible, live feedback instead of a page that just looks inert. Mirrors
+/// [_GatewayStatusIcon]'s "connecting" color so the two agree at a glance.
+class _ConnectingBanner extends StatelessWidget {
+  const _ConnectingBanner({required this.status, required this.onTap});
+
+  final String status;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Colors.orange.shade700;
+    return Material(
+      color: Colors.orange.shade50,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2, color: color),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  status,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                    color: Colors.orange.shade900,
+                  ),
                 ),
               ),
             ],

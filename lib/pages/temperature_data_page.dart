@@ -7,15 +7,8 @@ import '../models/n2k_device_info.dart';
 import '../models/node_settings.dart';
 import '../models/telemetry_data.dart';
 import '../services/node_settings_service.dart';
+import '../services/temperature_history_service.dart';
 import 'node_settings_page.dart';
-
-// ── Data model ───────────────────────────────────────────────────────────────
-
-class _TempSample {
-  const _TempSample(this.timestamp, this.celsius);
-  final DateTime timestamp;
-  final double celsius;
-}
 
 // ── Page widget ───────────────────────────────────────────────────────────────
 
@@ -23,6 +16,7 @@ class TemperatureDataPage extends StatefulWidget {
   const TemperatureDataPage({
     super.key,
     required this.telemetryController,
+    required this.temperatureHistory,
     this.device,
     this.settingsService,
     this.primaryActionLabel,
@@ -30,6 +24,7 @@ class TemperatureDataPage extends StatefulWidget {
   });
 
   final BleController telemetryController;
+  final TemperatureHistoryService temperatureHistory;
   final N2kDeviceInfo? device;
   final NodeSettingsService? settingsService;
   final String? primaryActionLabel;
@@ -43,28 +38,8 @@ class _TemperatureDataPageState extends State<TemperatureDataPage> {
   final PageController _pageController = PageController();
   int _selectedPage = 0;
 
-  // Rolling history of temperature samples (max 6 hours).
-  static const _historyWindow = Duration(hours: 6);
-  final List<_TempSample> _history = [];
-
-  @override
-  void initState() {
-    super.initState();
-    widget.telemetryController.addListener(_captureSample);
-  }
-
-  @override
-  void didUpdateWidget(covariant TemperatureDataPage old) {
-    super.didUpdateWidget(old);
-    if (widget.telemetryController != old.telemetryController) {
-      old.telemetryController.removeListener(_captureSample);
-      widget.telemetryController.addListener(_captureSample);
-    }
-  }
-
   @override
   void dispose() {
-    widget.telemetryController.removeListener(_captureSample);
     _pageController.dispose();
     super.dispose();
   }
@@ -79,17 +54,15 @@ class _TemperatureDataPageState extends State<TemperatureDataPage> {
         : widget.telemetryController.telemetry;
   }
 
-  void _captureSample() {
-    final t = _telemetry();
-    if (t.temperatureC == null) return;
-    final now = DateTime.now();
-    final cutoff = now.subtract(_historyWindow);
-    _history.add(_TempSample(now, t.temperatureC!));
-    while (_history.isNotEmpty && _history.first.timestamp.isBefore(cutoff)) {
-      _history.removeAt(0);
-    }
-    // History update is picked up by AnimatedBuilder via the same notification.
-  }
+  /// History is logged app-wide (see `AppDependencies.standard()`), keyed by
+  /// N2K source address so a second temperature sensor's readings don't mix
+  /// into this chart.
+  List<TempHistorySample> _history() =>
+      widget.temperatureHistory.historyFor(widget.device?.sourceAddress ?? -1);
+
+  /// All-time low/high for this page's node, persisted across app restarts.
+  TempRecord _record() =>
+      widget.temperatureHistory.recordFor(widget.device?.sourceAddress ?? -1);
 
 void _openSettings() {
     if (widget.device == null || widget.settingsService == null) return;
@@ -134,6 +107,7 @@ void _openSettings() {
         child: AnimatedBuilder(
           animation: Listenable.merge([
             widget.telemetryController,
+            widget.temperatureHistory,
             if (widget.settingsService != null) widget.settingsService!,
           ]),
           builder: (context, _) {
@@ -181,14 +155,17 @@ void _openSettings() {
                           temperatureC: tempC,
                         ),
                         _TemperatureHistoryView(
-                          history: _history,
+                          history: _history(),
                           currentTempC: tempC,
+                        ),
+                        _TemperatureRecordsView(
+                          record: _record(),
                         ),
                       ],
                     ),
                   ),
                   const SizedBox(height: 14),
-                  _TempPagerIndicator(activeIndex: _selectedPage),
+                  _TempPagerIndicator(activeIndex: _selectedPage, count: 3),
                   if (widget.primaryActionLabel != null) ...[
                     const SizedBox(height: 16),
                     SizedBox(
@@ -344,14 +321,15 @@ class _TemperatureCard extends StatelessWidget {
 // ── Pager indicator ───────────────────────────────────────────────────────────
 
 class _TempPagerIndicator extends StatelessWidget {
-  const _TempPagerIndicator({required this.activeIndex});
+  const _TempPagerIndicator({required this.activeIndex, required this.count});
   final int activeIndex;
+  final int count;
 
   @override
   Widget build(BuildContext context) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
-      children: List<Widget>.generate(2, (index) {
+      children: List<Widget>.generate(count, (index) {
         final isActive = index == activeIndex;
         return AnimatedContainer(
           duration: const Duration(milliseconds: 200),
@@ -378,7 +356,7 @@ class _TemperatureHistoryView extends StatelessWidget {
     this.currentTempC,
   });
 
-  final List<_TempSample> history;
+  final List<TempHistorySample> history;
   final double? currentTempC;
 
   @override
@@ -432,12 +410,254 @@ class _TemperatureHistoryView extends StatelessWidget {
   }
 }
 
+// ── Records page ─────────────────────────────────────────────────────────────
+
+class _TemperatureRecordsView extends StatelessWidget {
+  const _TemperatureRecordsView({required this.record});
+
+  final TempRecord record;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasData = record.minC != null && record.maxC != null;
+    return Container(
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xfff9fbff), Color(0xffedf3ff)],
+        ),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0xffd9e4ff), width: 1.2),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: hasData
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'All-Time Records',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 18,
+                    color: Color(0xff111827),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Expanded(
+                  child: _RecordStatCard(
+                    label: 'All-time high',
+                    celsius: record.maxC!,
+                    at: record.maxAt,
+                    icon: Icons.thermostat_rounded,
+                    accent: const Color(0xffb91c1c), // red-700
+                    gradient: const [Color(0xfffff5f5), Color(0xfffee2e2)],
+                    borderColor: const Color(0xfffca5a5), // red-300
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _RecordRangeBadge(rangeC: record.maxC! - record.minC!),
+                const SizedBox(height: 12),
+                Expanded(
+                  child: _RecordStatCard(
+                    label: 'All-time low',
+                    celsius: record.minC!,
+                    at: record.minAt,
+                    icon: Icons.ac_unit_rounded,
+                    accent: const Color(0xff0369a1), // sky-700
+                    gradient: const [Color(0xfff0f9ff), Color(0xffe0f2fe)],
+                    borderColor: const Color(0xff7dd3fc), // sky-300
+                  ),
+                ),
+              ],
+            )
+          : const Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.query_stats_rounded,
+                    size: 36,
+                    color: Color(0xff94a3b8),
+                  ),
+                  SizedBox(height: 10),
+                  Text(
+                    'No records yet',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xff64748b),
+                    ),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    'Keep the app running to start tracking\nall-time highs and lows.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xff94a3b8),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+    );
+  }
+}
+
+class _RecordStatCard extends StatelessWidget {
+  const _RecordStatCard({
+    required this.label,
+    required this.celsius,
+    required this.at,
+    required this.icon,
+    required this.accent,
+    required this.gradient,
+    required this.borderColor,
+  });
+
+  final String label;
+  final double celsius;
+  final DateTime? at;
+  final IconData icon;
+  final Color accent;
+  final List<Color> gradient;
+  final Color borderColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: gradient,
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: borderColor, width: 1.2),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, size: 17, color: accent),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: accent,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text(
+            '${celsius.toStringAsFixed(1)} °C',
+            style: const TextStyle(
+              fontSize: 38,
+              fontWeight: FontWeight.w800,
+              color: Color(0xff0f172a),
+              letterSpacing: -1,
+            ),
+          ),
+          if (at != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              '${_formatRecordAge(at!)} · ${_formatFullRecordDate(at!)}',
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: Color(0xff64748b),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _RecordRangeBadge extends StatelessWidget {
+  const _RecordRangeBadge({required this.rangeC});
+  final double rangeC;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xffffffff),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: const Color(0xffdfe5ef), width: 1.2),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.swap_vert_rounded,
+              size: 14,
+              color: Color(0xff64748b),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              '${rangeC.toStringAsFixed(1)} °C range',
+              style: const TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+                color: Color(0xff475569),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Short relative label for when an all-time record was set — matches the
+/// age-formatting convention already used on the chart's X-axis (see
+/// `_TempChartPainter`).
+String _formatRecordAge(DateTime at) {
+  final age = DateTime.now().difference(at);
+  if (age.inSeconds < 60) return 'just now';
+  if (age.inMinutes < 60) return '${age.inMinutes}m ago';
+  if (age.inHours < 24) return '${age.inHours}h ago';
+  return '${age.inDays}d ago';
+}
+
+/// Full calendar date + time for a record, e.g. "3 Jan 2026, 14:32".
+String _formatFullRecordDate(DateTime at) {
+  const months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+  final h = at.hour.toString().padLeft(2, '0');
+  final m = at.minute.toString().padLeft(2, '0');
+  return '${at.day} ${months[at.month - 1]} ${at.year}, $h:$m';
+}
+
 // ── Chart widget ──────────────────────────────────────────────────────────────
 
 class _TempChart extends StatefulWidget {
   const _TempChart({required this.history});
 
-  final List<_TempSample> history;
+  final List<TempHistorySample> history;
 
   @override
   State<_TempChart> createState() => _TempChartState();
@@ -563,7 +783,7 @@ class _TempChartPainter extends CustomPainter {
     required this.start,
   });
 
-  final List<_TempSample> samples;
+  final List<TempHistorySample> samples;
   final DateTime now;
   final DateTime start;
 

@@ -28,6 +28,7 @@ class AppPreferencesService {
   static const _keyWindTwsSamples = 'wind_tws_samples';
   static const _keyWindAwsSamples = 'wind_aws_samples';
   static const _keyWindSession = 'wind_session';
+  static const _keyTempRecords = 'temp_records';
 
   // ── factory ──────────────────────────────────────────────────────────────
 
@@ -196,6 +197,24 @@ class AppPreferencesService {
     await _prefs.setString(_keyWindSession, jsonEncode(session));
   }
 
+  // ── all-time temperature records ─────────────────────────────────────────
+  // Persisted as {"<src>": {"minC":.., "minAt":.., "maxC":.., "maxAt":..}}.
+
+  Map<String, dynamic> get tempRecords {
+    final raw = _prefs.getString(_keyTempRecords);
+    if (raw == null) return const {};
+    try {
+      final decoded = jsonDecode(raw);
+      return decoded is Map<String, dynamic> ? decoded : const {};
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  Future<void> saveTempRecords(Map<String, dynamic> records) async {
+    await _prefs.setString(_keyTempRecords, jsonEncode(records));
+  }
+
   // ── clear ─────────────────────────────────────────────────────────────────
 
   Future<void> clearAll() async {
@@ -208,5 +227,6 @@ class AppPreferencesService {
     await _prefs.remove(_keyWindTwsSamples);
     await _prefs.remove(_keyWindAwsSamples);
     await _prefs.remove(_keyWindSession);
+    await _prefs.remove(_keyTempRecords);
   }
 }

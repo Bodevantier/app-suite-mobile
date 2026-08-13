@@ -5,13 +5,13 @@
 /// the About page. Refreshed automatically by the post-commit
 /// hook — see .git/hooks/post-commit.
 class BuildInfo {
-  static const int gitCommitCount = 22;
-  static const String gitCommit = 'f806aac';
-  static const String gitCommitFull = 'f806aaca2bfffb4c8e360d285176b34719ac48d8';
-  static const String gitCommitSubject = 'Add Demo Mode: simulate a full sensor fleet without a real gateway';
-  static const String gitCommitDate = '2026-08-06T12:15:46+02:00';
+  static const int gitCommitCount = 23;
+  static const String gitCommit = '0509304';
+  static const String gitCommitFull = '0509304c79f98a335288b0cdce7695b5f4835128';
+  static const String gitCommitSubject = 'Fix jarring startup: play the splash animation in full, hold on the finished logo, and crossfade into Home';
+  static const String gitCommitDate = '2026-08-13T11:30:45+02:00';
   static const String gitBranch = 'main';
-  static const String gitDescribe = 'known-good-2026-04-11-21-gf806aac';
-  static const bool gitDirty = false;
-  static const String generatedAt = '2026-08-06T10:15:48.128742Z';
+  static const String gitDescribe = 'known-good-2026-04-11-22-g0509304-dirty';
+  static const bool gitDirty = true;
+  static const String generatedAt = '2026-08-13T09:30:46.820846Z';
 }

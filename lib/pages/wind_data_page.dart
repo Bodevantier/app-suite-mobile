@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -7,21 +6,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../controllers/ble_controller.dart';
 import '../models/n2k_device_info.dart';
 import '../services/node_settings_service.dart';
+import '../services/wind_angle_history_service.dart';
 import '../services/wind_averages_service.dart';
 import 'node_settings_page.dart';
 import 'wind_settings_page.dart';
-
-/// One angular sample retained for the rolling wind-angle heatmap.
-class _AngleSample {
-  const _AngleSample(this.timestamp, this.angleDeg);
-  final DateTime timestamp;
-  final double angleDeg;
-}
 
 class WindDataPage extends StatefulWidget {
   const WindDataPage({
     super.key,
     required this.telemetryController,
+    required this.windAngleHistory,
     this.device,
     this.hasNavigationDevice = false,
     this.windAverages,
@@ -31,6 +25,7 @@ class WindDataPage extends StatefulWidget {
   });
 
   final BleController telemetryController;
+  final WindAngleHistoryService windAngleHistory;
   final N2kDeviceInfo? device;
   final bool hasNavigationDevice;
   final WindAveragesService? windAverages;
@@ -55,21 +50,15 @@ class _WindDataPageState extends State<WindDataPage> {
   final PageController _pageController = PageController();
   int _selectedPage = 0;
 
-  // Rolling 5-min angle history per mode, sampled at ~1 Hz by [_historyTimer].
-  // Kept on the page (not in WindAveragesService) so the heatmap works even
-  // when the averages service isn't wired in.
+  // Angle history is logged app-wide (see `AppDependencies.standard()`) so
+  // the trail keeps accumulating regardless of which page is open; this page
+  // just queries the currently selected window on each rebuild.
   Duration get _historyWindow =>
       Duration(minutes: _windSettings.trailWindowMinutes);
-  final List<_AngleSample> _apparentHistory = [];
-  final List<_AngleSample> _trueHistory = [];
-  Timer? _historyTimer;
 
   @override
   void initState() {
     super.initState();
-    // Capture a sample every time new telemetry arrives — same rate as the
-    // arrow update — instead of a fixed 1-second timer.
-    widget.telemetryController.addListener(_captureAngleSample);
     _loadPreferences();
   }
 
@@ -84,10 +73,7 @@ class _WindDataPageState extends State<WindDataPage> {
   }
 
   void _clearTrailData() {
-    setState(() {
-      _apparentHistory.clear();
-      _trueHistory.clear();
-    });
+    widget.windAngleHistory.clear();
   }
 
   void _openSettings() {
@@ -119,44 +105,9 @@ class _WindDataPageState extends State<WindDataPage> {
   }
 
   @override
-  void didUpdateWidget(covariant WindDataPage old) {
-    super.didUpdateWidget(old);
-    if (widget.telemetryController != old.telemetryController) {
-      old.telemetryController.removeListener(_captureAngleSample);
-      widget.telemetryController.addListener(_captureAngleSample);
-    }
-  }
-
-  @override
   void dispose() {
-    widget.telemetryController.removeListener(_captureAngleSample);
-    _historyTimer?.cancel();
     _pageController.dispose();
     super.dispose();
-  }
-
-  void _captureAngleSample() {
-    final t = widget.telemetryController.telemetry;
-    final now = DateTime.now();
-    final cutoff = now.subtract(_historyWindow);
-    if (t.apparentWindAngleDeg != null) {
-      _apparentHistory.add(_AngleSample(now, t.apparentWindAngleDeg!));
-    }
-    final twa = t.effectiveTrueWindAngleDeg;
-    if (twa != null) {
-      _trueHistory.add(_AngleSample(now, twa));
-    }
-    _trim(_apparentHistory, cutoff);
-    _trim(_trueHistory, cutoff);
-    // No setState needed — AnimatedBuilder already rebuilds on this same
-    // notification, which propagates the updated history to the gauge widget
-    // and triggers _AnimatedWindGaugeState.didUpdateWidget.
-  }
-
-  static void _trim(List<_AngleSample> list, DateTime cutoff) {
-    while (list.isNotEmpty && list.first.timestamp.isBefore(cutoff)) {
-      list.removeAt(0);
-    }
   }
 
   void _toggleWindSpeedUnit() {
@@ -250,6 +201,7 @@ class _WindDataPageState extends State<WindDataPage> {
         child: AnimatedBuilder(
           animation: Listenable.merge([
             widget.telemetryController,
+            widget.windAngleHistory,
             if (widget.windAverages != null) widget.windAverages!,
           ]),
           builder: (context, _) {
@@ -291,7 +243,8 @@ class _WindDataPageState extends State<WindDataPage> {
                           missingDataMessage: _apparentWindMissingMessage(
                             telemetry.apparentWindSpeedMs,
                           ),
-                          history: _apparentHistory,
+                          history: widget.windAngleHistory
+                              .apparentHistory(_historyWindow),
                           showHeatmap: _showHeatmap,
                           onHeatmapToggle: _toggleHeatmap,
                           trailHalfLifeSec: _windSettings.trailHalfLifeSec,
@@ -311,7 +264,8 @@ class _WindDataPageState extends State<WindDataPage> {
                             missingDataMessage: _trueWindMissingMessage(
                               telemetry.effectiveTrueWindSpeedMs,
                             ),
-                            history: _trueHistory,
+                            history:
+                                widget.windAngleHistory.trueHistory(_historyWindow),
                             showHeatmap: _showHeatmap,
                             onHeatmapToggle: _toggleHeatmap,
                             trailHalfLifeSec: _windSettings.trailHalfLifeSec,
@@ -404,7 +358,7 @@ class _WindModeView extends StatelessWidget {
   final bool showAngleAsCompass;
   final VoidCallback? onAngleTap;
   final String? missingDataMessage;
-  final List<_AngleSample> history;
+  final List<AngleSample> history;
   final bool showHeatmap;
   final VoidCallback? onHeatmapToggle;
   final double trailHalfLifeSec;
@@ -523,7 +477,7 @@ class _WindBoatAngleView extends StatelessWidget {
   final VoidCallback? onSpeedTap;
   final bool showAngleAsCompass;
   final VoidCallback? onAngleTap;
-  final List<_AngleSample> history;
+  final List<AngleSample> history;
   final bool showHeatmap;
   final VoidCallback? onHeatmapToggle;
   final double trailHalfLifeSec;
@@ -802,7 +756,7 @@ class _AnimatedWindGauge extends StatefulWidget {
   });
 
   final double? angleDeg;
-  final List<_AngleSample> history;
+  final List<AngleSample> history;
   final bool showHeatmap;
   final double trailHalfLifeSec;
   final double trailSigmaDeg;
