@@ -5,13 +5,13 @@
 /// the About page. Refreshed automatically by the post-commit
 /// hook — see .git/hooks/post-commit.
 class BuildInfo {
-  static const int gitCommitCount = 29;
-  static const String gitCommit = '3f7d28b';
-  static const String gitCommitFull = '3f7d28b2cd0fe7e32222090de58bd4ca2ae8cb4e';
-  static const String gitCommitSubject = 'Add configurable dashboard home page';
-  static const String gitCommitDate = '2026-08-13T15:56:10+02:00';
+  static const int gitCommitCount = 33;
+  static const String gitCommit = '481760a';
+  static const String gitCommitFull = '481760a8b161a147726c0d32f01ca72fefa9789a';
+  static const String gitCommitSubject = 'Fix NMEA 2000 device class table shifted one row from the real ISO 11783 standard';
+  static const String gitCommitDate = '2026-08-18T21:53:49+02:00';
   static const String gitBranch = 'main';
-  static const String gitDescribe = 'known-good-2026-04-11-28-g3f7d28b';
-  static const bool gitDirty = false;
-  static const String generatedAt = '2026-08-13T13:56:12.233995Z';
+  static const String gitDescribe = 'known-good-2026-04-11-32-g481760a-dirty';
+  static const bool gitDirty = true;
+  static const String generatedAt = '2026-08-18T19:53:51.192440Z';
 }
