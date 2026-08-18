@@ -3,7 +3,7 @@
 //
 // Device function codes are scoped to their device class — the same number
 // means different things in different classes (e.g. 130 = Wind in class 85,
-// but also = VHF Radio in class 60). The lookup therefore requires both.
+// but also = VHF Radio in class 70). The lookup therefore requires both.
 //
 // NOTE: For Class 85 (External Environment) the NMEA 2000 standard only
 // formally defines Function 130 (Atmospheric) and 140 (Aquatic). The other
@@ -13,15 +13,16 @@
 // fallback when no live PGN frames have been seen yet.
 
 abstract final class N2kDeviceClass {
-  static const int safety            = 20;
-  static const int steering          = 30;
-  static const int propulsion        = 40;
-  static const int navigation        = 50;
-  static const int communication     = 60;
-  static const int sensor            = 75;
-  static const int instrumentation   = 80;
-  static const int environmental     = 85;
-  static const int electrical        = 90;
+  static const int safety                 = 20;
+  static const int electricalDistribution = 30;
+  static const int electricalGeneration   = 35;
+  static const int steering               = 40;
+  static const int propulsion             = 50;
+  static const int navigation             = 60;
+  static const int communication          = 70;
+  static const int sensor                 = 75;
+  static const int instrumentation        = 80;
+  static const int environmental          = 85;
 }
 
 abstract final class N2kDeviceFunction {
@@ -34,12 +35,12 @@ abstract final class N2kDeviceFunction {
   static const int humidity          = 170;
   static const int pressure          = 180;
 
-  // Navigation (class 50) ---------------------------------------------------
+  // Navigation (class 60) ---------------------------------------------------
   static const int gps               = 145;
   static const int echosounder       = 140;
   static const int chartplotter      = 190;
 
-  // Communication (class 60) ------------------------------------------------
+  // Communication (class 70) -------------------------------------------------
   static const int vhfRadio          = 130;
   static const int aisClassA         = 135;
   static const int aisClassB         = 136;
@@ -83,11 +84,12 @@ String? n2kCategoryFromCodes(int? deviceClass, int? deviceFunction) {
     return 'instrumentation';
   }
   switch (deviceClass) {
-    case N2kDeviceClass.propulsion:       return 'propulsion';
-    case N2kDeviceClass.steering:         return 'steering';
-    case N2kDeviceClass.safety:           return 'safety';
-    case N2kDeviceClass.electrical:       return 'electrical';
-    case N2kDeviceClass.sensor:           return 'sensor';
+    case N2kDeviceClass.propulsion:              return 'propulsion';
+    case N2kDeviceClass.steering:                return 'steering';
+    case N2kDeviceClass.safety:                  return 'safety';
+    case N2kDeviceClass.electricalDistribution:  return 'electrical';
+    case N2kDeviceClass.electricalGeneration:    return 'electrical';
+    case N2kDeviceClass.sensor:                  return 'sensor';
   }
   return null;
 }
