@@ -40,6 +40,12 @@ class DashboardLayoutService extends ChangeNotifier {
   DashboardSwitchMode _switchMode = DashboardSwitchMode.manual;
   int _idCounter = 0;
 
+  // Ephemeral (never persisted, never survives a demo-mode switch) — set by
+  // Settings' New/Edit dashboard actions to ask DashboardHomePage to jump to
+  // this layout and turn on tile-editing, since those entry points live in
+  // Settings rather than as always-visible controls on the dashboard itself.
+  String? _editRequestId;
+
   static Future<DashboardLayoutService> load() async {
     final prefs = await SharedPreferences.getInstance();
     return DashboardLayoutService(prefs);
@@ -50,6 +56,7 @@ class DashboardLayoutService extends ChangeNotifier {
   List<DashboardLayout> get layouts => List<DashboardLayout>.unmodifiable(_layouts);
   String? get activeLayoutId => _activeLayoutId;
   DashboardSwitchMode get switchMode => _switchMode;
+  String? get editRequestId => _editRequestId;
 
   DashboardLayout? get activeLayout {
     final id = _activeLayoutId;
@@ -178,6 +185,19 @@ class DashboardLayoutService extends ChangeNotifier {
     _switchMode = mode;
     notifyListeners();
     await _persist();
+  }
+
+  /// Asks [DashboardHomePage] to jump to [id] and enter tile-editing mode.
+  void requestEdit(String id) {
+    _editRequestId = id;
+    notifyListeners();
+  }
+
+  /// Clears a pending edit request once [DashboardHomePage] has acted on it.
+  void consumeEditRequest() {
+    if (_editRequestId == null) return;
+    _editRequestId = null;
+    notifyListeners();
   }
 
   Future<void> clearAll() async {

@@ -53,7 +53,7 @@ class DashboardGrid extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.all(32),
           child: Text(
-            'No tiles yet — tap the pencil to add some.',
+            'No tiles yet — edit this dashboard from Settings → Dashboards to add some.',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
