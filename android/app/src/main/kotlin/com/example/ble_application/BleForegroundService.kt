@@ -52,18 +52,34 @@ class BleForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_DEVICE_DETECTED) {
-            startForeground(
-                NOTIFICATION_ID,
-                buildNotification("SDolve", "Gateway detected — connecting…")
-            )
-            bootHeadlessEngineIfNeeded()
+        // startForeground() with foregroundServiceType="connectedDevice" throws
+        // (SecurityException / ForegroundServiceStartNotAllowedException) on
+        // Android 14+ if BLUETOOTH_CONNECT/BLUETOOTH_SCAN isn't already granted
+        // at this exact moment — which is possible here since this can be
+        // triggered by AutoConnectService.start() on app launch for a
+        // previously-known gateway, ahead of the BLE permission prompt that
+        // flutter_blue_plus only requests once an actual scan/connect is
+        // attempted. Left uncaught this took the whole app down; failing to
+        // start this best-effort background watch is fine — the app still
+        // reconnects and requests BLE permissions normally once it's open.
+        try {
+            if (intent?.action == ACTION_DEVICE_DETECTED) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    buildNotification("SDolve", "Gateway detected — connecting…")
+                )
+                bootHeadlessEngineIfNeeded()
+                return START_STICKY
+            }
+            val title = intent?.getStringExtra(EXTRA_TITLE) ?: "SDolve"
+            val text = intent?.getStringExtra(EXTRA_TEXT) ?: "Watching for gateway"
+            startForeground(NOTIFICATION_ID, buildNotification(title, text))
             return START_STICKY
+        } catch (e: Exception) {
+            Log.w(TAG, "startForeground failed — BLE permission not granted yet?", e)
+            stopSelf()
+            return START_NOT_STICKY
         }
-        val title = intent?.getStringExtra(EXTRA_TITLE) ?: "SDolve"
-        val text = intent?.getStringExtra(EXTRA_TEXT) ?: "Watching for gateway"
-        startForeground(NOTIFICATION_ID, buildNotification(title, text))
-        return START_STICKY
     }
 
     /**

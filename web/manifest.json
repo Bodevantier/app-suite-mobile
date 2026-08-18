@@ -1,6 +1,6 @@
 {
-    "name": "ble_application",
-    "short_name": "ble_application",
+    "name": "SDolve",
+    "short_name": "SDolve",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

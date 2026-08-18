@@ -74,7 +74,7 @@ class _BleGatewayAppState extends State<BleGatewayApp>
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'ESP32 BLE Gateway',
+      title: 'SDolve',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
       ),
