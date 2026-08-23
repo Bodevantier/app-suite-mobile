@@ -73,7 +73,7 @@ class DemoDataService {
     src: DemoDeviceSrc.engineTemp,
     deviceClass: 85,
     deviceFunction: 160, // Temperature
-    model: 'EnviroTemp Engine Bay',
+    model: 'SDolve Engine Bay Temp',
     mfrText: 'SDolve Marine',
     serial: 'SDT-220144',
     softwareVersion: '1.2.0',
@@ -83,7 +83,7 @@ class DemoDataService {
     src: DemoDeviceSrc.fridgeTemp,
     deviceClass: 85,
     deviceFunction: 160,
-    model: 'EnviroTemp Fridge',
+    model: 'SDolve Fridge Temp',
     mfrText: 'SDolve Marine',
     serial: 'SDT-220145',
     softwareVersion: '1.2.0',
@@ -93,7 +93,7 @@ class DemoDataService {
     src: DemoDeviceSrc.fuelTank,
     deviceClass: 80, // Instrumentation
     deviceFunction: 150, // Fluid level sender (project convention)
-    model: 'FuelWatch 200 Tank Sender',
+    model: 'SDolve Fuel Tank',
     mfrText: 'SDolve Marine',
     serial: 'SDF-330091',
     softwareVersion: '1.1.3',
@@ -103,7 +103,7 @@ class DemoDataService {
     src: DemoDeviceSrc.waterTank,
     deviceClass: 80,
     deviceFunction: 150,
-    model: 'AquaWatch 300 Tank Sender',
+    model: 'SDolve Water Tank',
     mfrText: 'SDolve Marine',
     serial: 'SDF-330092',
     softwareVersion: '1.1.3',
@@ -113,12 +113,15 @@ class DemoDataService {
     src: DemoDeviceSrc.engine,
     deviceClass: 40, // Propulsion
     deviceFunction: 160,
-    model: 'Engine Data Interface',
+    model: 'SDolve Engine',
     mfrText: 'SDolve Marine',
     serial: 'SDE-440017',
     softwareVersion: '2.0.1',
     modelVersion: 'Rev A',
   );
+  // Unlike the other demo devices, the GPS/compass is deliberately NOT
+  // branded SDolve — a real boat's GPS is typically third-party hardware
+  // (chartplotter, standalone puck), not one of SDolve's own N2K sensors.
   static const _gps = _DemoDevice(
     src: DemoDeviceSrc.gps,
     deviceClass: 50, // Navigation

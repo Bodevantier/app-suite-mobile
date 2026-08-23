@@ -332,6 +332,8 @@ class _DashboardHomePageState extends State<DashboardHomePage> {
                     editing: _editingLayoutId == layout.id,
                     bleGatewayController: dependencies.bleGatewayController,
                     telemetryController: dependencies.telemetryController,
+                    nodeSettingsService: dependencies.nodeSettings,
+                    alarmMonitor: dependencies.alarmMonitor,
                     onReorder: (draggedTileId, overTileId) =>
                         _reorderTiles(layout, draggedTileId, overTileId),
                     onRemoveTile: (tileId) => _removeTile(layout, tileId),

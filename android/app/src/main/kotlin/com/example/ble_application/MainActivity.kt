@@ -62,6 +62,10 @@ class MainActivity : FlutterActivity() {
                         }
                         result.success(null)
                     }
+                    "requestNotificationPermission" -> {
+                        requestNotificationPermissionIfNeeded()
+                        result.success(null)
+                    }
                     "stopWatching" -> {
                         stopService(Intent(this, BleForegroundService::class.java))
                         BleBackgroundScan.unregister(applicationContext)
@@ -75,6 +79,18 @@ class MainActivity : FlutterActivity() {
                     "isIgnoringBatteryOptimizations" -> {
                         val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
                         result.success(pm?.isIgnoringBatteryOptimizations(packageName) ?: true)
+                    }
+                    "postAlarmNotification" -> {
+                        val id = call.argument<Int>("id") ?: 0
+                        val title = call.argument<String>("title") ?: "SDolve"
+                        val text = call.argument<String>("text") ?: ""
+                        AlarmNotifications.post(applicationContext, id, title, text)
+                        result.success(null)
+                    }
+                    "cancelAlarmNotification" -> {
+                        val id = call.argument<Int>("id") ?: 0
+                        AlarmNotifications.cancel(applicationContext, id)
+                        result.success(null)
                     }
                     "requestIgnoreBatteryOptimizations" -> {
                         try {

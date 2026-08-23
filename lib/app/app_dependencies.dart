@@ -7,8 +7,11 @@ import '../controllers/app_setup_controller.dart';
 import '../controllers/ble_controller.dart';
 import '../dashboard/auto_mode_detector.dart';
 import '../demo/demo_mode_controller.dart';
+import '../services/alarm_monitor_service.dart';
+import '../services/alarm_notification_service.dart';
 import '../services/app_preferences_service.dart';
 import '../services/dashboard_layout_service.dart';
+import '../services/incident_log_service.dart';
 import '../services/night_mode_service.dart';
 import '../services/node_settings_service.dart';
 import '../services/temperature_history_service.dart';
@@ -30,12 +33,15 @@ class AppDependencies {
     required this.nightMode,
     required this.dashboards,
     required this.autoModeDetector,
+    required this.incidentLog,
+    required this.alarmMonitor,
   });
 
   static Future<AppDependencies> standard() async {
     final preferences = await AppPreferencesService.load();
     final nodeSettings = await NodeSettingsService.load();
     final dashboards = await DashboardLayoutService.load();
+    final incidentLog = await IncidentLogService.load();
 
     final telemetryController = BleController();
     final repository = BleGatewayRepository();
@@ -138,6 +144,18 @@ class AppDependencies {
       preferences: preferences,
     );
 
+    // Alarm notifications — init() only sets up the local notification
+    // channel (no I/O beyond that), safe to do unconditionally here so it's
+    // ready in both the foreground app and the headless background isolate.
+    final alarmNotifications = AlarmNotificationService();
+    await alarmNotifications.init();
+    final alarmMonitor = AlarmMonitorService(
+      telemetryController: telemetryController,
+      nodeSettings: nodeSettings,
+      incidentLog: incidentLog,
+      notifications: alarmNotifications,
+    );
+
     return AppDependencies(
       preferences: preferences,
       appSetupController: AppSetupController(preferences: preferences),
@@ -163,6 +181,8 @@ class AppDependencies {
       nightMode: NightModeService(preferences: preferences),
       dashboards: dashboards,
       autoModeDetector: AutoModeDetector(telemetryController: telemetryController),
+      incidentLog: incidentLog,
+      alarmMonitor: alarmMonitor,
     );
   }
 
@@ -179,4 +199,6 @@ class AppDependencies {
   final NightModeService nightMode;
   final DashboardLayoutService dashboards;
   final AutoModeDetector autoModeDetector;
+  final IncidentLogService incidentLog;
+  final AlarmMonitorService alarmMonitor;
 }

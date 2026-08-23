@@ -6,6 +6,7 @@ import '../controllers/ble_controller.dart';
 import '../models/n2k_device_info.dart';
 import '../models/node_settings.dart';
 import '../models/telemetry_data.dart';
+import '../services/alarm_monitor_service.dart';
 import '../services/node_settings_service.dart';
 import '../services/temperature_history_service.dart';
 import 'node_settings_page.dart';
@@ -19,6 +20,7 @@ class TemperatureDataPage extends StatefulWidget {
     required this.temperatureHistory,
     this.device,
     this.settingsService,
+    this.alarmMonitor,
     this.primaryActionLabel,
     this.onPrimaryAction,
   });
@@ -27,6 +29,7 @@ class TemperatureDataPage extends StatefulWidget {
   final TemperatureHistoryService temperatureHistory;
   final N2kDeviceInfo? device;
   final NodeSettingsService? settingsService;
+  final AlarmMonitorService? alarmMonitor;
   final String? primaryActionLabel;
   final VoidCallback? onPrimaryAction;
 
@@ -109,20 +112,21 @@ void _openSettings() {
             widget.telemetryController,
             widget.temperatureHistory,
             if (widget.settingsService != null) widget.settingsService!,
+            ?widget.alarmMonitor,
           ]),
           builder: (context, _) {
             final telemetry = _telemetry();
-            final settings = (widget.device != null &&
-                    widget.settingsService != null)
-                ? widget.settingsService!.forDevice(widget.device!)
+            final device = widget.device;
+            final settings = (device != null && widget.settingsService != null)
+                ? widget.settingsService!.forDevice(device)
                 : NodeSettings.empty;
             final tempC = telemetry.temperatureC;
-            final showHigh = settings.highTempAlarmEnabled &&
-                tempC != null &&
-                tempC >= settings.highTempAlarmC;
-            final showLow = settings.lowTempAlarmEnabled &&
-                tempC != null &&
-                tempC <= settings.lowTempAlarmC;
+            final showHigh = device != null &&
+                (widget.alarmMonitor?.isActive(device, AlarmKind.tempHigh) ??
+                    false);
+            final showLow = device != null &&
+                (widget.alarmMonitor?.isActive(device, AlarmKind.tempLow) ??
+                    false);
             return Padding(
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
               child: Column(

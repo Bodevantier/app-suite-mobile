@@ -1,9 +1,18 @@
 import 'package:flutter/material.dart';
 
 class WelcomePage extends StatelessWidget {
-  const WelcomePage({super.key, required this.onStartSetup});
+  const WelcomePage({
+    super.key,
+    required this.onStartSetup,
+    required this.onTryDemoMode,
+  });
 
   final VoidCallback onStartSetup;
+
+  /// Skips the gateway pairing flow entirely and drops straight into the
+  /// app with simulated sensor data — for trying it out (or developing it)
+  /// without real BLE hardware on hand.
+  final VoidCallback onTryDemoMode;
 
   @override
   Widget build(BuildContext context) {
@@ -38,6 +47,25 @@ class WelcomePage extends StatelessWidget {
                 child: FilledButton(
                   onPressed: onStartSetup,
                   child: const Text('Start setup'),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: onTryDemoMode,
+                  icon: const Icon(Icons.theater_comedy_outlined),
+                  label: const Text('Try demo mode instead'),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'See every screen with simulated wind, tank, engine and '
+                'navigation data — no gateway required.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
                 ),
               ),
             ],

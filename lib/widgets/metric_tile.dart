@@ -10,7 +10,30 @@ import '../models/dashboard_layout.dart';
 import '../models/n2k_device_info.dart';
 import '../n2k/fluid_icons.dart';
 import '../n2k/n2k_liveness.dart';
+import '../services/alarm_monitor_service.dart';
+import '../services/node_settings_service.dart';
 import 'live_activity_indicator.dart';
+
+/// Whether [device]'s current reading for [metric] is under an active alarm
+/// — used to redden the tile. Only fluid level and temperature tiles have
+/// alarms modeled today; every other metric is never alarming.
+bool _isTileAlarming(
+  AlarmMonitorService? monitor,
+  N2kDeviceInfo device,
+  DashboardMetricType metric,
+) {
+  if (monitor == null) return false;
+  switch (metric) {
+    case DashboardMetricType.fluidLevelPct:
+      return monitor.isActive(device, AlarmKind.tankLow) ||
+          monitor.isActive(device, AlarmKind.tankHigh);
+    case DashboardMetricType.temperatureC:
+      return monitor.isActive(device, AlarmKind.tempHigh) ||
+          monitor.isActive(device, AlarmKind.tempLow);
+    default:
+      return false;
+  }
+}
 
 /// One square on a dashboard grid: the live value for [tile], resolved
 /// fresh from whichever device currently matches its stored identity.
@@ -27,6 +50,8 @@ class MetricTile extends StatefulWidget {
     required this.tile,
     required this.bleGatewayController,
     required this.telemetryController,
+    required this.nodeSettingsService,
+    this.alarmMonitor,
     this.onRemove,
     this.onCycleUnit,
   });
@@ -34,6 +59,8 @@ class MetricTile extends StatefulWidget {
   final DashboardTile tile;
   final BleGatewayController bleGatewayController;
   final BleController telemetryController;
+  final NodeSettingsService nodeSettingsService;
+  final AlarmMonitorService? alarmMonitor;
 
   /// Non-null only while the dashboard is in edit mode — shows a remove
   /// affordance instead of the live indicator.
@@ -70,6 +97,8 @@ class _MetricTileState extends State<MetricTile> {
       animation: Listenable.merge([
         widget.bleGatewayController,
         widget.telemetryController,
+        widget.nodeSettingsService,
+        ?widget.alarmMonitor,
       ]),
       builder: (context, _) => _buildContent(context),
     );
@@ -85,6 +114,8 @@ class _MetricTileState extends State<MetricTile> {
     );
 
     final live = device != null && isDeviceLive(device);
+    final alarming = live &&
+        _isTileAlarming(widget.alarmMonitor, device, widget.tile.metric);
     String? valueText;
     var icon = spec.icon;
     if (live) {
@@ -97,11 +128,24 @@ class _MetricTileState extends State<MetricTile> {
       valueText = spec.valueText(valueTelemetry, unitIndex: widget.tile.unitIndex);
       // A tank is whatever it's actually holding — a fixed water-drop icon
       // and generic blue for every fluid tile is wrong for fuel, waste,
-      // oil, etc. Matches the color/icon used on the fluid detail page.
+      // oil, etc. Matches the color/icon used on the fluid detail page. A
+      // user override (Node settings → Tank → Fluid type) takes priority
+      // over the device's own broadcast value, same as the detail page —
+      // otherwise two tanks whose sensors both broadcast the same raw type
+      // keep showing the same icon even after the user tells them apart.
       if (widget.tile.metric == DashboardMetricType.fluidLevelPct) {
-        icon = iconForFluidType(telemetry.fluidType);
-        metricColor = colorForFluidType(telemetry.fluidType);
+        final fluidType =
+            widget.nodeSettingsService.forDevice(device).customFluidTypeLabel ??
+                telemetry.fluidType;
+        icon = iconForFluidType(fluidType);
+        metricColor = colorForFluidType(fluidType);
       }
+    }
+    // An active alarm overrides whatever color the metric would otherwise
+    // show (including a tank's fluid-type color) — it's the most important
+    // thing to notice on the tile.
+    if (alarming) {
+      metricColor = cs.error;
     }
 
     return Card(
@@ -109,7 +153,10 @@ class _MetricTileState extends State<MetricTile> {
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: cs.outline.withValues(alpha: 0.12)),
+        side: BorderSide(
+          color: alarming ? cs.error : cs.outline.withValues(alpha: 0.12),
+          width: alarming ? 2 : 1,
+        ),
       ),
       child: InkWell(
         // The whole tile cycles the unit — much easier to hit than a small
@@ -122,18 +169,42 @@ class _MetricTileState extends State<MetricTile> {
             children: [
               Row(
                 children: [
-                  Container(
-                    width: 30,
-                    height: 30,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: metricColor.withValues(alpha: live ? 0.16 : 0.08),
-                    ),
-                    child: Icon(
-                      icon,
-                      size: 16,
-                      color: metricColor.withValues(alpha: live ? 1 : 0.5),
-                    ),
+                  Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Container(
+                        width: 30,
+                        height: 30,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: metricColor.withValues(alpha: live ? 0.16 : 0.08),
+                        ),
+                        child: Icon(
+                          icon,
+                          size: 16,
+                          color: metricColor.withValues(alpha: live ? 1 : 0.5),
+                        ),
+                      ),
+                      if (alarming)
+                        Positioned(
+                          right: -2,
+                          top: -2,
+                          child: Container(
+                            width: 14,
+                            height: 14,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: cs.error,
+                              border: Border.all(color: cs.surface, width: 1.5),
+                            ),
+                            child: const Icon(
+                              Icons.priority_high_rounded,
+                              size: 9,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                   const Spacer(),
                   if (widget.onRemove != null)

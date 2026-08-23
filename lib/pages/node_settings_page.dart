@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../models/n2k_device_info.dart';
 import '../models/node_settings.dart';
 import '../models/engine_settings.dart';
+import '../n2k/fluid_icons.dart';
 import '../services/node_settings_service.dart';
 
 String _capitalize(String s) =>
@@ -18,34 +19,63 @@ class NodeSettingsPage extends StatefulWidget {
     super.key,
     required this.device,
     required this.settingsService,
+    this.initialFluidType,
+    this.initialCapacityL,
   });
 
   final N2kDeviceInfo device;
   final NodeSettingsService settingsService;
+
+  /// The device's own broadcast fluid-type label (PGN 127505), read once
+  /// when this page is opened. Only used as a fallback to pick the right
+  /// alarm direction (low vs. high) when the user hasn't set a fluid-type
+  /// override yet — this page has no live telemetry feed of its own.
+  final String? initialFluidType;
+
+  /// The device's own broadcast tank capacity (PGN 127505), read once when
+  /// this page is opened. Shown as the capacity field's hint so an empty
+  /// field reads as "currently using 200 L from the device" rather than
+  /// looking like nothing is known — same reasoning as [initialFluidType].
+  final double? initialCapacityL;
 
   @override
   State<NodeSettingsPage> createState() => _NodeSettingsPageState();
 }
 
 class _NodeSettingsPageState extends State<NodeSettingsPage> {
-  // Per product scope: only the three tank media the SDolve sensor is
-  // actually used for are user-selectable. Other PGN 127505 fluid type
-  // codes are still decoded from the bus, but not offered as overrides.
+  // Per product scope: only the tank media the SDolve sensor is actually
+  // used for are user-selectable. Other PGN 127505 fluid type codes are
+  // still decoded from the bus, but not offered as overrides.
   static const List<String> _fluidTypes = <String>[
     'Fuel',
     'Water',
     'Gray water',
+    'Black water',
   ];
 
   late final TextEditingController _nameController;
   late final TextEditingController _capacityController;
   late final TextEditingController _notesController;
+
+  // True once any field diverges from what was loaded — gates the
+  // leave-without-saving warning in the PopScope below.
+  bool _dirty = false;
+  void _markDirty() {
+    if (_dirty) return;
+    setState(() => _dirty = true);
+  }
+
   String? _fluidTypeOverride;
   bool _alarmEnabled = false;
   // ValueNotifier (instead of plain double + setState) so dragging the
   // threshold slider only rebuilds the slider row itself, not the whole
   // settings form. This removes visible drag lag on lower-end devices.
   final ValueNotifier<double> _alarmPct = ValueNotifier<double>(10);
+
+  // High-level alarm — shown instead of the low-level one for waste tanks
+  // (gray/black water), which fill up during use rather than draining down.
+  bool _highLevelAlarmEnabled = false;
+  final ValueNotifier<double> _highLevelAlarmPct = ValueNotifier<double>(90);
 
   bool _highTempAlarmEnabled = false;
   final ValueNotifier<double> _highTempAlarmC = ValueNotifier<double>(35.0);
@@ -81,10 +111,22 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
     _fluidTypeOverride = s.customFluidTypeLabel;
     _alarmEnabled = s.lowLevelAlarmEnabled;
     _alarmPct.value = s.lowLevelAlarmPct;
+    _highLevelAlarmEnabled = s.highLevelAlarmEnabled;
+    _highLevelAlarmPct.value = s.highLevelAlarmPct;
     _highTempAlarmEnabled = s.highTempAlarmEnabled;
     _highTempAlarmC.value = s.highTempAlarmC;
     _lowTempAlarmEnabled = s.lowTempAlarmEnabled;
     _lowTempAlarmC.value = s.lowTempAlarmC;
+
+    // Listeners are attached only after every field above has its initial
+    // value, so loading existing settings never itself counts as a change.
+    _nameController.addListener(_markDirty);
+    _capacityController.addListener(_markDirty);
+    _notesController.addListener(_markDirty);
+    _alarmPct.addListener(_markDirty);
+    _highLevelAlarmPct.addListener(_markDirty);
+    _highTempAlarmC.addListener(_markDirty);
+    _lowTempAlarmC.addListener(_markDirty);
 
     // Engine calibration is stored globally (shared across engine sources),
     // so load it asynchronously and fold it into the form when ready.
@@ -96,6 +138,8 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
           _maxRpm = engine.maxRpm;
         });
         _pulleyRatio.value = engine.pulleyRatio;
+        // Attached after the loaded value lands, same reasoning as above.
+        _pulleyRatio.addListener(_markDirty);
       });
     }
   }
@@ -106,6 +150,7 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
     _capacityController.dispose();
     _notesController.dispose();
     _alarmPct.dispose();
+    _highLevelAlarmPct.dispose();
     _highTempAlarmC.dispose();
     _lowTempAlarmC.dispose();
     _pulleyRatio.dispose();
@@ -135,6 +180,8 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
       customCapacityL: capacity,
       lowLevelAlarmEnabled: _alarmEnabled,
       lowLevelAlarmPct: _alarmPct.value,
+      highLevelAlarmEnabled: _highLevelAlarmEnabled,
+      highLevelAlarmPct: _highLevelAlarmPct.value,
       highTempAlarmEnabled: _highTempAlarmEnabled,
       highTempAlarmC: _highTempAlarmC.value,
       lowTempAlarmEnabled: _lowTempAlarmEnabled,
@@ -154,6 +201,62 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
 
     if (!mounted) return;
     Navigator.of(context).pop();
+  }
+
+  /// Confirmation shown when the user tries to leave with unsaved edits.
+  /// Returns true only when they explicitly choose to discard them — a
+  /// "Save" tap here saves and pops the settings page itself, so this
+  /// resolves false (nothing more to do) in that case.
+  Future<bool> _confirmDiscardChanges() async {
+    final cs = Theme.of(context).colorScheme;
+    final result = await showGeneralDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Discard changes',
+      barrierColor: Colors.black54,
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return AlertDialog(
+          icon: Icon(Icons.error_outline_rounded, color: cs.error),
+          title: const Text('Unsaved changes'),
+          content: const Text(
+            "You've changed this device's settings but haven't saved. "
+            'Leave anyway?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Keep editing'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: Text('Discard', style: TextStyle(color: cs.error)),
+            ),
+            FilledButton(
+              onPressed: () async {
+                Navigator.of(context).pop(false);
+                await _save();
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+        );
+        return FadeTransition(
+          opacity: curved,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.92, end: 1.0).animate(curved),
+            child: child,
+          ),
+        );
+      },
+    );
+    return result ?? false;
   }
 
   Future<void> _resetAll() async {
@@ -191,20 +294,34 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
     final isFluidLevel = widget.device.isFluidLevelDevice;
     final isTemperature = widget.device.isTemperatureDevice;
     final isEngine = widget.device.isEngineDevice;
+    // No live telemetry feed on this page — fall back to the value seen
+    // when it was opened until the user picks an explicit override.
+    final isWasteTank = isWasteFluidType(
+      _fluidTypeOverride ?? widget.initialFluidType,
+    );
     final cs = Theme.of(context).colorScheme;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Device settings'),
-        actions: [
-          IconButton(
-            tooltip: 'Reset to defaults',
-            icon: const Icon(Icons.restart_alt),
-            onPressed: _resetAll,
-          ),
-        ],
-      ),
-      body: ListView(
+    return PopScope<void>(
+      canPop: !_dirty,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final discard = await _confirmDiscardChanges();
+        if (discard && context.mounted) {
+          Navigator.of(context).pop();
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Device settings'),
+          actions: [
+            IconButton(
+              tooltip: 'Reset to defaults',
+              icon: const Icon(Icons.restart_alt),
+              onPressed: _resetAll,
+            ),
+          ],
+        ),
+        body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           _DeviceHeader(device: widget.device),
@@ -259,8 +376,10 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
                       ),
                     ),
                   ],
-                  onChanged: (value) =>
-                      setState(() => _fluidTypeOverride = value),
+                  onChanged: (value) => setState(() {
+                    _fluidTypeOverride = value;
+                    _dirty = true;
+                  }),
                 ),
                 const SizedBox(height: 12),
                 TextField(
@@ -271,18 +390,25 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
                   inputFormatters: [
                     FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
                   ],
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: 'Tank capacity (litres)',
-                    hintText: 'Leave empty to use device value',
-                    border: OutlineInputBorder(),
+                    hintText: widget.initialCapacityL != null
+                        ? '${widget.initialCapacityL!.round()} (device value)'
+                        : 'Leave empty to use device value',
+                    border: const OutlineInputBorder(),
                     suffixText: 'L',
                   ),
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'App-side override only. To change what the device '
-                  'broadcasts to chart-plotters and other instruments, '
-                  'update TANK_CAPACITY_L in the sensor firmware.',
+                  widget.initialCapacityL != null
+                      ? 'Device currently reports ${widget.initialCapacityL!.round()} L. '
+                          'App-side override only — to change what it broadcasts to '
+                          'chart-plotters and other instruments, update '
+                          'TANK_CAPACITY_L in the sensor firmware.'
+                      : 'App-side override only. To change what the device '
+                          'broadcasts to chart-plotters and other instruments, '
+                          'update TANK_CAPACITY_L in the sensor firmware.',
                   style: TextStyle(
                     fontSize: 12,
                     color: cs.onSurface.withValues(alpha: 0.6),
@@ -293,24 +419,55 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
             const SizedBox(height: 12),
 
             // ── Alarm ─────────────────────────────────────────────────────
-            _SectionCard(
-              title: 'Low-level alarm',
-              children: [
-                SwitchListTile.adaptive(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Warn when level is low'),
-                  value: _alarmEnabled,
-                  onChanged: (v) => setState(() => _alarmEnabled = v),
-                ),
-                Opacity(
-                  opacity: _alarmEnabled ? 1.0 : 0.5,
-                  child: _AlarmThresholdSlider(
-                    value: _alarmPct,
-                    enabled: _alarmEnabled,
+            // Waste tanks (gray/black water) fill up during use, so they
+            // want a "getting full" warning; fuel/water tanks drain down
+            // and want a "getting empty" one. Only one is shown at a time.
+            if (isWasteTank)
+              _SectionCard(
+                title: 'High-level alarm',
+                children: [
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Warn when tank is nearly full'),
+                    value: _highLevelAlarmEnabled,
+                    onChanged: (v) => setState(() {
+                      _highLevelAlarmEnabled = v;
+                      _dirty = true;
+                    }),
                   ),
-                ),
-              ],
-            ),
+                  Opacity(
+                    opacity: _highLevelAlarmEnabled ? 1.0 : 0.5,
+                    child: _AlarmThresholdSlider(
+                      value: _highLevelAlarmPct,
+                      enabled: _highLevelAlarmEnabled,
+                      min: 50,
+                      max: 100,
+                    ),
+                  ),
+                ],
+              )
+            else
+              _SectionCard(
+                title: 'Low-level alarm',
+                children: [
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Warn when level is low'),
+                    value: _alarmEnabled,
+                    onChanged: (v) => setState(() {
+                      _alarmEnabled = v;
+                      _dirty = true;
+                    }),
+                  ),
+                  Opacity(
+                    opacity: _alarmEnabled ? 1.0 : 0.5,
+                    child: _AlarmThresholdSlider(
+                      value: _alarmPct,
+                      enabled: _alarmEnabled,
+                    ),
+                  ),
+                ],
+              ),
             const SizedBox(height: 12),
           ],
 
@@ -323,8 +480,10 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
                   contentPadding: EdgeInsets.zero,
                   title: const Text('High-temperature warning'),
                   value: _highTempAlarmEnabled,
-                  onChanged: (v) =>
-                      setState(() => _highTempAlarmEnabled = v),
+                  onChanged: (v) => setState(() {
+                    _highTempAlarmEnabled = v;
+                    _dirty = true;
+                  }),
                 ),
                 Opacity(
                   opacity: _highTempAlarmEnabled ? 1.0 : 0.5,
@@ -342,8 +501,10 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Low-temperature warning'),
                   value: _lowTempAlarmEnabled,
-                  onChanged: (v) =>
-                      setState(() => _lowTempAlarmEnabled = v),
+                  onChanged: (v) => setState(() {
+                    _lowTempAlarmEnabled = v;
+                    _dirty = true;
+                  }),
                 ),
                 Opacity(
                   opacity: _lowTempAlarmEnabled ? 1.0 : 0.5,
@@ -392,7 +553,10 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
                       .toList(),
                   onChanged: (value) {
                     if (value != null) {
-                      setState(() => _alternatorPoles = value);
+                      setState(() {
+                        _alternatorPoles = value;
+                        _dirty = true;
+                      });
                     }
                   },
                 ),
@@ -486,7 +650,10 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
                       .toList(),
                   onChanged: (value) {
                     if (value != null) {
-                      setState(() => _maxRpm = value);
+                      setState(() {
+                        _maxRpm = value;
+                        _dirty = true;
+                      });
                     }
                   },
                 ),
@@ -528,7 +695,8 @@ class _NodeSettingsPageState extends State<NodeSettingsPage> {
               child: const Text('Save'),
             ),
           ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -635,25 +803,29 @@ class _AlarmThresholdSlider extends StatelessWidget {
   const _AlarmThresholdSlider({
     required this.value,
     required this.enabled,
+    this.min = 0,
+    this.max = 50,
   });
 
   final ValueNotifier<double> value;
   final bool enabled;
+  final double min;
+  final double max;
 
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<double>(
       valueListenable: value,
       builder: (context, v, _) {
-        final clamped = v.clamp(0.0, 50.0);
+        final clamped = v.clamp(min, max);
         return Row(
           children: [
             const Text('Threshold'),
             Expanded(
               child: Slider(
-                min: 0,
-                max: 50,
-                divisions: 50,
+                min: min,
+                max: max,
+                divisions: (max - min).round(),
                 label: '${clamped.round()} %',
                 value: clamped,
                 onChanged: enabled ? (nv) => value.value = nv : null,

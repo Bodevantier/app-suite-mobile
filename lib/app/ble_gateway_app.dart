@@ -32,6 +32,12 @@ class _BleGatewayAppState extends State<BleGatewayApp>
     // loop — never the headless BLE-wake isolate in main.dart, which has no
     // UI and nothing to theme.
     widget.dependencies.nightMode.startForeground();
+    // Up front, regardless of whether/when a gateway ever connects —
+    // otherwise a Demo Mode-only session (no real gateway) never triggers
+    // the request startWatching would have, and alarms silently never
+    // notify. Needs an Activity, so only ever called from here, never from
+    // AppDependencies.standard() (shared with the headless isolate).
+    unawaited(widget.dependencies.alarmMonitor.notifications.requestPermission());
   }
 
   void _startAutoConnectIfKnown() {
@@ -106,12 +112,23 @@ class _RootPageState extends State<RootPage> {
           return WelcomePage(
             onStartSetup: () =>
                 _openBleSetupFlow(context, widget.dependencies),
+            onTryDemoMode: () => _startDemoMode(widget.dependencies),
           );
         }
         return AppHomePage(dependencies: widget.dependencies);
       },
     );
   }
+}
+
+/// Skips gateway pairing and marks setup complete with Demo Mode already
+/// running, so someone without BLE hardware on hand can still see the app
+/// populated. [AppSetupController.completeSetup] persists, same as a real
+/// pairing would — Demo Mode itself does not, so a later real launch still
+/// starts disconnected rather than silently staying in demo data.
+Future<void> _startDemoMode(AppDependencies dependencies) async {
+  await dependencies.demoMode.enable();
+  dependencies.appSetupController.completeSetup();
 }
 
 Future<void> _openBleSetupFlow(
@@ -216,6 +233,7 @@ class _AppHomePageState extends State<AppHomePage> {
                         autoConnectService: dependencies.autoConnectService,
                         preferences: dependencies.preferences,
                         dashboards: dependencies.dashboards,
+                        incidentLog: dependencies.incidentLog,
                       ),
                     ),
                   );

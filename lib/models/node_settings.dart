@@ -15,6 +15,8 @@ class NodeSettings {
     this.customCapacityL,
     this.lowLevelAlarmEnabled = false,
     this.lowLevelAlarmPct = 10,
+    this.highLevelAlarmEnabled = false,
+    this.highLevelAlarmPct = 90,
     this.highTempAlarmEnabled = false,
     this.highTempAlarmC = 35.0,
     this.lowTempAlarmEnabled = false,
@@ -40,6 +42,16 @@ class NodeSettings {
   /// Threshold percent (0–100) for the low-level alarm.
   final double lowLevelAlarmPct;
 
+  /// When true, the page shows a red "high level" banner whenever the
+  /// reported fluid level rises above [highLevelAlarmPct]. Intended for
+  /// waste tanks (gray/black water), which fill up during use instead of
+  /// draining down, so they want a "getting full" warning rather than the
+  /// "getting empty" one [lowLevelAlarmEnabled] gives fuel/water tanks.
+  final bool highLevelAlarmEnabled;
+
+  /// Threshold percent (0–100) for the high-level alarm.
+  final double highLevelAlarmPct;
+
   /// When true, a banner is shown when temperature rises above [highTempAlarmC].
   final bool highTempAlarmEnabled;
 
@@ -61,6 +73,7 @@ class NodeSettings {
       (customFluidTypeLabel == null || customFluidTypeLabel!.trim().isEmpty) &&
       customCapacityL == null &&
       !lowLevelAlarmEnabled &&
+      !highLevelAlarmEnabled &&
       !highTempAlarmEnabled &&
       !lowTempAlarmEnabled &&
       (notes == null || notes!.trim().isEmpty);
@@ -74,6 +87,8 @@ class NodeSettings {
     bool clearCustomCapacityL = false,
     bool? lowLevelAlarmEnabled,
     double? lowLevelAlarmPct,
+    bool? highLevelAlarmEnabled,
+    double? highLevelAlarmPct,
     bool? highTempAlarmEnabled,
     double? highTempAlarmC,
     bool? lowTempAlarmEnabled,
@@ -91,6 +106,9 @@ class NodeSettings {
           : (customCapacityL ?? this.customCapacityL),
       lowLevelAlarmEnabled: lowLevelAlarmEnabled ?? this.lowLevelAlarmEnabled,
       lowLevelAlarmPct: lowLevelAlarmPct ?? this.lowLevelAlarmPct,
+      highLevelAlarmEnabled:
+          highLevelAlarmEnabled ?? this.highLevelAlarmEnabled,
+      highLevelAlarmPct: highLevelAlarmPct ?? this.highLevelAlarmPct,
       highTempAlarmEnabled: highTempAlarmEnabled ?? this.highTempAlarmEnabled,
       highTempAlarmC: highTempAlarmC ?? this.highTempAlarmC,
       lowTempAlarmEnabled: lowTempAlarmEnabled ?? this.lowTempAlarmEnabled,
@@ -106,6 +124,8 @@ class NodeSettings {
         if (customCapacityL != null) 'customCapacityL': customCapacityL,
         'lowLevelAlarmEnabled': lowLevelAlarmEnabled,
         'lowLevelAlarmPct': lowLevelAlarmPct,
+        'highLevelAlarmEnabled': highLevelAlarmEnabled,
+        'highLevelAlarmPct': highLevelAlarmPct,
         'highTempAlarmEnabled': highTempAlarmEnabled,
         'highTempAlarmC': highTempAlarmC,
         'lowTempAlarmEnabled': lowTempAlarmEnabled,
@@ -126,6 +146,8 @@ class NodeSettings {
       customCapacityL: readDouble(json['customCapacityL']),
       lowLevelAlarmEnabled: json['lowLevelAlarmEnabled'] == true,
       lowLevelAlarmPct: readDouble(json['lowLevelAlarmPct']) ?? 10,
+      highLevelAlarmEnabled: json['highLevelAlarmEnabled'] == true,
+      highLevelAlarmPct: readDouble(json['highLevelAlarmPct']) ?? 90,
       highTempAlarmEnabled: json['highTempAlarmEnabled'] == true,
       highTempAlarmC: readDouble(json['highTempAlarmC']) ?? 35.0,
       lowTempAlarmEnabled: json['lowTempAlarmEnabled'] == true,

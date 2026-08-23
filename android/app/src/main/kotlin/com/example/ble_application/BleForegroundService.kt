@@ -16,6 +16,7 @@ import io.flutter.FlutterInjector
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.embedding.engine.dart.DartExecutor
+import io.flutter.plugin.common.MethodChannel
 
 /**
  * Keeps the app process alive with a low-priority ongoing notification while
@@ -115,6 +116,31 @@ class BleForegroundService : Service() {
                         "backgroundConnectMain"
                     )
                     engine.dartExecutor.executeDartEntrypoint(entrypoint)
+                    // MainActivity registers the same channel for the
+                    // foreground engine — this headless one needs its own
+                    // registration so alarm notifications (and any other
+                    // native call) still work while the app process isn't
+                    // in the foreground at all.
+                    MethodChannel(
+                        engine.dartExecutor.binaryMessenger,
+                        "com.example.ble_application/ble_service"
+                    ).setMethodCallHandler { call, result ->
+                        when (call.method) {
+                            "postAlarmNotification" -> {
+                                val id = call.argument<Int>("id") ?: 0
+                                val title = call.argument<String>("title") ?: "SDolve"
+                                val text = call.argument<String>("text") ?: ""
+                                AlarmNotifications.post(applicationContext, id, title, text)
+                                result.success(null)
+                            }
+                            "cancelAlarmNotification" -> {
+                                val id = call.argument<Int>("id") ?: 0
+                                AlarmNotifications.cancel(applicationContext, id)
+                                result.success(null)
+                            }
+                            else -> result.notImplemented()
+                        }
+                    }
                     FlutterEngineCache.getInstance().put(HEADLESS_ENGINE_ID, engine)
                 }
             } catch (e: Exception) {

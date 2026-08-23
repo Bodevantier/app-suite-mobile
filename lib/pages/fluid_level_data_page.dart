@@ -4,6 +4,7 @@ import '../controllers/ble_controller.dart';
 import '../models/n2k_device_info.dart';
 import '../models/node_settings.dart';
 import '../n2k/fluid_icons.dart';
+import '../services/alarm_monitor_service.dart';
 import '../services/node_settings_service.dart';
 import 'node_settings_page.dart';
 
@@ -16,6 +17,7 @@ class FluidLevelDataPage extends StatelessWidget {
     required this.telemetryController,
     this.device,
     this.settingsService,
+    this.alarmMonitor,
     this.primaryActionLabel,
     this.onPrimaryAction,
   });
@@ -23,16 +25,20 @@ class FluidLevelDataPage extends StatelessWidget {
   final BleController telemetryController;
   final N2kDeviceInfo? device;
   final NodeSettingsService? settingsService;
+  final AlarmMonitorService? alarmMonitor;
   final String? primaryActionLabel;
   final VoidCallback? onPrimaryAction;
 
   void _openSettings(BuildContext context) {
     if (device == null || settingsService == null) return;
+    final telemetry = telemetryController.telemetryFor(device!.sourceAddress);
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => NodeSettingsPage(
           device: device!,
           settingsService: settingsService!,
+          initialFluidType: telemetry.fluidType,
+          initialCapacityL: telemetry.fluidCapacityL,
         ),
       ),
     );
@@ -81,6 +87,7 @@ class FluidLevelDataPage extends StatelessWidget {
           animation: Listenable.merge([
             telemetryController,
             ?settingsListenable,
+            ?alarmMonitor,
           ]),
           builder: (context, _) {
             // With several tank sensors on the bus, the boat-wide telemetry
@@ -95,16 +102,21 @@ class FluidLevelDataPage extends StatelessWidget {
             final levelPct = telemetry.fluidLevelPct;
             final fluidType = telemetry.fluidType;
             final capacityL = telemetry.fluidCapacityL;
-            final showAlarm = settings.lowLevelAlarmEnabled &&
-                levelPct != null &&
-                levelPct <= settings.lowLevelAlarmPct;
+            final showLowAlarm = device != null &&
+                (alarmMonitor?.isActive(device!, AlarmKind.tankLow) ?? false);
+            final showHighAlarm = device != null &&
+                (alarmMonitor?.isActive(device!, AlarmKind.tankHigh) ?? false);
             return Padding(
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  if (showAlarm) ...[
+                  if (showLowAlarm) ...[
                     _LowLevelBanner(thresholdPct: settings.lowLevelAlarmPct),
+                    const SizedBox(height: 12),
+                  ],
+                  if (showHighAlarm) ...[
+                    _HighLevelBanner(thresholdPct: settings.highLevelAlarmPct),
                     const SizedBox(height: 12),
                   ],
                   Expanded(
@@ -158,6 +170,43 @@ class _LowLevelBanner extends StatelessWidget {
           Expanded(
             child: Text(
               'Low level — below ${thresholdPct.round()} % threshold',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: Color(0xff7f1d1d),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HighLevelBanner extends StatelessWidget {
+  const _HighLevelBanner({required this.thresholdPct});
+  final double thresholdPct;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xfffee2e2),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xfffca5a5), width: 1.2),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.warning_amber_rounded,
+            color: Color(0xffb91c1c),
+            size: 22,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'High level — above ${thresholdPct.round()} % threshold',
               style: const TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w700,

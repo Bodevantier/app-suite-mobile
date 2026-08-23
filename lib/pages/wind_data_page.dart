@@ -39,7 +39,9 @@ class WindDataPage extends StatefulWidget {
 enum _SogUnit { kn, kmh, ms }
 
 class _WindDataPageState extends State<WindDataPage> {
-  bool _showWindSpeedInKnots = false;
+  // Knots by default — matches SOG's default below and the dashboard
+  // tiles' unit order. The sensor's own m/s reading is still one tap away.
+  bool _showWindSpeedInKnots = true;
   bool _showHeatmap = false;
   static const _kTrailKey = 'wind_trail_enabled';
   WindSettings _windSettings = const WindSettings();
@@ -321,10 +323,10 @@ class _WindDataPageState extends State<WindDataPage> {
 
     if (_showWindSpeedInKnots) {
       final speedKnots = speedMps * 1.94384;
-      return '${speedKnots.toStringAsFixed(2)} kn';
+      return '${speedKnots.toStringAsFixed(1)} kn';
     }
 
-    return '${speedMps.toStringAsFixed(2)} m/s';
+    return '${speedMps.toStringAsFixed(1)} m/s';
   }
 }
 

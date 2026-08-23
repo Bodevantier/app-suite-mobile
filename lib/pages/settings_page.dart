@@ -6,11 +6,13 @@ import '../ble/services/auto_connect_service.dart';
 import '../demo/demo_mode_controller.dart';
 import '../services/app_preferences_service.dart';
 import '../services/dashboard_layout_service.dart';
+import '../services/incident_log_service.dart';
 import '../services/night_mode_service.dart';
 import '../widgets/demo_mode_card.dart';
 import 'about_page.dart';
 import 'ble_connection_page.dart';
 import 'dashboard_settings_page.dart';
+import 'incident_log_page.dart';
 
 /// App-wide settings — Night Mode, Bluetooth connection management, and an
 /// entry point to About. A natural home for any future app-level (rather
@@ -24,6 +26,7 @@ class SettingsPage extends StatelessWidget {
     required this.autoConnectService,
     required this.preferences,
     required this.dashboards,
+    required this.incidentLog,
   });
 
   final NightModeService nightMode;
@@ -32,6 +35,7 @@ class SettingsPage extends StatelessWidget {
   final AutoConnectService autoConnectService;
   final AppPreferencesService preferences;
   final DashboardLayoutService dashboards;
+  final IncidentLogService incidentLog;
 
   @override
   Widget build(BuildContext context) {
@@ -63,6 +67,30 @@ class SettingsPage extends StatelessWidget {
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
                     builder: (_) => DashboardSettingsPage(dashboards: dashboards),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(
+                color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.2),
+              ),
+            ),
+            child: ListTile(
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              leading: const Icon(Icons.history_rounded),
+              title: const Text('Incident log'),
+              subtitle: const Text('History of alarm triggers and clears.'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => IncidentLogPage(incidentLog: incidentLog),
                   ),
                 );
               },

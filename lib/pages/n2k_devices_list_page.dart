@@ -7,6 +7,7 @@ import '../controllers/ble_controller.dart';
 import '../models/n2k_device_info.dart';
 import '../n2k/fluid_icons.dart';
 import '../n2k/n2k_liveness.dart';
+import '../services/alarm_monitor_service.dart';
 import '../services/node_settings_service.dart';
 import '../widgets/connection_banners.dart';
 import 'ble_connection_page.dart';
@@ -187,6 +188,7 @@ class _N2kDevicesListPageState extends State<N2kDevicesListPage> {
                                 settingsService: dependencies.nodeSettings,
                                 telemetryController:
                                     dependencies.telemetryController,
+                                alarmMonitor: dependencies.alarmMonitor,
                                 onTap: !deviceLive
                                     ? null
                                     : () => _openDevice(context, device),
@@ -258,6 +260,7 @@ class _N2kDevicesListPageState extends State<N2kDevicesListPage> {
             telemetryController: dependencies.telemetryController,
             temperatureHistory: dependencies.temperatureHistory,
             settingsService: dependencies.nodeSettings,
+            alarmMonitor: dependencies.alarmMonitor,
           ),
         ),
       );
@@ -271,6 +274,7 @@ class _N2kDevicesListPageState extends State<N2kDevicesListPage> {
             device: device,
             telemetryController: dependencies.telemetryController,
             settingsService: dependencies.nodeSettings,
+            alarmMonitor: dependencies.alarmMonitor,
           ),
         ),
       );
@@ -344,6 +348,7 @@ class _HomeDeviceCard extends StatefulWidget {
     required this.onTap,
     this.settingsService,
     this.telemetryController,
+    this.alarmMonitor,
   });
 
   final N2kDeviceInfo device;
@@ -351,6 +356,7 @@ class _HomeDeviceCard extends StatefulWidget {
   final VoidCallback? onTap;
   final NodeSettingsService? settingsService;
   final BleController? telemetryController;
+  final AlarmMonitorService? alarmMonitor;
 
   @override
   State<_HomeDeviceCard> createState() => _HomeDeviceCardState();
@@ -398,34 +404,7 @@ class _HomeDeviceCardState extends State<_HomeDeviceCard>
 
   bool _isAlarmActive() {
     if (!widget.isLive) return false;
-    final settings = widget.settingsService?.forDevice(widget.device);
-    // Evaluate alarms against this node's own telemetry — the boat-wide
-    // telemetry holds whichever node transmitted last and would trip the
-    // alarm on the wrong card when two devices share a PGN.
-    final telemetry =
-        widget.telemetryController?.telemetryFor(widget.device.sourceAddress);
-
-    if (widget.device.isFluidLevelDevice) {
-      if (settings == null || !settings.lowLevelAlarmEnabled) return false;
-      final level = telemetry?.fluidLevelPct;
-      if (level == null) return false;
-      return level <= settings.lowLevelAlarmPct;
-    }
-
-    if (widget.device.isTemperatureDevice) {
-      if (settings == null) return false;
-      final tempC = telemetry?.temperatureC;
-      if (tempC == null) return false;
-      if (settings.highTempAlarmEnabled && tempC >= settings.highTempAlarmC) {
-        return true;
-      }
-      if (settings.lowTempAlarmEnabled && tempC <= settings.lowTempAlarmC) {
-        return true;
-      }
-      return false;
-    }
-
-    return false;
+    return widget.alarmMonitor?.isDeviceAlarmActive(widget.device) ?? false;
   }
 
   @override
@@ -444,6 +423,7 @@ class _HomeDeviceCardState extends State<_HomeDeviceCard>
       animation: Listenable.merge([
         widget.settingsService,
         widget.telemetryController,
+        ?widget.alarmMonitor,
         _pulseEased,
       ]),
       builder: (context, _) {
@@ -457,11 +437,14 @@ class _HomeDeviceCardState extends State<_HomeDeviceCard>
         // A tank's icon and color follow what it's actually holding (fuel,
         // waste, oil, ...) rather than defaulting every fluid sensor to a
         // generic blue water drop — needs live telemetry, so it's read
-        // inside the builder. Matches the fluid detail page's coloring.
+        // inside the builder. Matches the fluid detail page's coloring. A
+        // user override (Node settings → Tank → Fluid type) takes priority
+        // over the device's own broadcast value, same as the detail page.
         final fluidType = device.isFluidLevelDevice
-            ? widget.telemetryController
-                ?.telemetryFor(device.sourceAddress)
-                .fluidType
+            ? settings?.customFluidTypeLabel ??
+                widget.telemetryController
+                    ?.telemetryFor(device.sourceAddress)
+                    .fluidType
             : null;
         return _buildCard(
           context,

@@ -4,6 +4,8 @@ import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import '../ble/controllers/ble_gateway_controller.dart';
 import '../controllers/ble_controller.dart';
 import '../models/dashboard_layout.dart';
+import '../services/alarm_monitor_service.dart';
+import '../services/node_settings_service.dart';
 import '../services/wind_angle_history_service.dart';
 import 'metric_tile.dart';
 import 'wind_compass_tile.dart';
@@ -21,6 +23,8 @@ class DashboardGrid extends StatelessWidget {
     required this.editing,
     required this.bleGatewayController,
     required this.telemetryController,
+    required this.nodeSettingsService,
+    this.alarmMonitor,
     required this.onReorder,
     required this.onRemoveTile,
     required this.onAddTile,
@@ -33,6 +37,8 @@ class DashboardGrid extends StatelessWidget {
   final bool editing;
   final BleGatewayController bleGatewayController;
   final BleController telemetryController;
+  final NodeSettingsService nodeSettingsService;
+  final AlarmMonitorService? alarmMonitor;
 
   /// Called the instant a dragged tile is held over another tile, so the
   /// grid reflows live (other tiles slide aside) to preview where it will
@@ -102,6 +108,8 @@ class DashboardGrid extends StatelessWidget {
             tile: tile,
             bleGatewayController: bleGatewayController,
             telemetryController: telemetryController,
+            nodeSettingsService: nodeSettingsService,
+            alarmMonitor: alarmMonitor,
             onRemove: editing ? () => onRemoveTile(tile.id) : null,
             onCycleUnit: () => onCycleUnit(tile),
           );

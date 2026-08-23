@@ -16,7 +16,7 @@ IconData iconForFluidType(String? fluidType) {
     case 'Black water':
       return Icons.delete_outline;
     case 'Gray water':
-      return Icons.water_damage_outlined;
+      return Icons.wash;
     case 'Live well':
       return Icons.set_meal_outlined;
     default:
@@ -45,5 +45,19 @@ Color colorForFluidType(String? fluidType) {
       return const Color(0xff854d0e);
     default:
       return const Color(0xff2563eb);
+  }
+}
+
+/// True for tanks that fill up during use (gray/black water) rather than
+/// draining down (fuel, fresh water). These want a "getting full" warning
+/// instead of a "getting empty" one, so [NodeSettings] keeps a separate
+/// high-level alarm for them — see the alarm section in NodeSettingsPage.
+bool isWasteFluidType(String? fluidType) {
+  switch (fluidType?.toLowerCase()) {
+    case 'gray water':
+    case 'black water':
+      return true;
+    default:
+      return false;
   }
 }
